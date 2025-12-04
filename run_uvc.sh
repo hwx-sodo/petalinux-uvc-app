@@ -15,7 +15,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 # 默认参数
 WIDTH=640
 HEIGHT=480
-FPS=30
+FPS=60
 TEST_MODE=0
 
 # 解析参数
@@ -134,7 +134,7 @@ echo "[4/4] 启动视频流..."
 echo ""
 
 # 构建可执行文件路径
-UVC_STREAM="${PROJECT_ROOT}/src/uvc_stream"
+UVC_STREAM="/usr/bin/uvc-camera-app"
 
 if [ ! -x "$UVC_STREAM" ]; then
     echo "错误: uvc_stream 可执行文件不存在或没有执行权限"
