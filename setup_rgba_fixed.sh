@@ -81,6 +81,7 @@ mkdir -p $FUNCTION/streaming/header/h
 # 注意：链接的是 Format 目录
 ln -s $FUNCTION/streaming/uncompressed/$FORMAT_NAME $FUNCTION/streaming/header/h/$FORMAT_NAME
 ln -s $FUNCTION/streaming/header/h $FUNCTION/streaming/class/fs/h
+ln -s $FUNCTION/streaming/header/h $FUNCTION/streaming/class/hs/h
 ln -s $FUNCTION/streaming/header/h $FUNCTION/streaming/class/ss/h
 
 # 修复 Control Header (原脚本也有这部分)
