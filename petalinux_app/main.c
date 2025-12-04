@@ -34,7 +34,7 @@
 #define FRAME_SIZE      (VIDEO_WIDTH * VIDEO_HEIGHT * BYTES_PER_PIXEL)
 
 /* 帧缓冲物理地址（必须与设备树中reserved-memory一致） */
-#define FRAME_BUFFER_PHYS   0x10000000
+#define FRAME_BUFFER_PHYS   0x20000000
 
 /* UVC设备节点 */
 #define UVC_DEVICE      "/dev/video0"
