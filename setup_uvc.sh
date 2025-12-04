@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 # setup_uvc.sh - UVC Gadget 配置脚本 (修正版)
 # 这个脚本需要在开发板上运行
 
@@ -241,7 +242,7 @@ mkdir -p $FUNCTION/streaming/uncompressed/u/480p
 echo $WIDTH > $FUNCTION/streaming/uncompressed/u/$FORMAT/wWidth
 echo $HEIGHT > $FUNCTION/streaming/uncompressed/u/$FORMAT/wHeight
 echo 166666 > $FUNCTION/streaming/uncompressed/u/$FORMAT/dwDefaultFrameInterval
-echo 32 > $FUNCTION/streaming/uncompressed/u/$FORMAT/bBitsPerPixel
+#echo 32 > $FUNCTION/streaming/uncompressed/u/$FORMAT/bBitsPerPixel
 
 # 计算缓冲区大小: W * H * 4 bytes (RGBA 32-bit)
 FRAME_SIZE=$((WIDTH * HEIGHT * 4))
