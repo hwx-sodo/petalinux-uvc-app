@@ -48,7 +48,7 @@
 
 /* 默认网络参数 */
 #define DEFAULT_PORT        5000
-#define DEFAULT_HOST        "192.168.1.100"
+#define DEFAULT_HOST        "10.72.43.219"    /* PC的IP地址 */
 #define DEFAULT_PROTOCOL    "udp"
 
 /* 目标帧率 */
