@@ -11,54 +11,69 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <errno.h>
+#include <dirent.h>
 
 /**
  * 打开UIO设备并映射VPSS寄存器
+ * 使用物理地址匹配方式（与VDMA一致）
  * 
  * @param vpss VPSS控制结构指针
  * @return 0成功，-1失败
  */
 static int vpss_open_uio(vpss_control_t *vpss)
 {
-    char uio_name[64];
-    char uio_path[128];
-    int i;
+    DIR *dp;
+    struct dirent *entry;
+    char addr_path[128];
+    char addr_str[64];
+    unsigned long addr;
     
-    /* 查找VPSS对应的UIO设备 */
-    for (i = 0; i < 10; i++) {
-        snprintf(uio_path, sizeof(uio_path), "/sys/class/uio/uio%d/name", i);
+    dp = opendir("/sys/class/uio");
+    if (dp == NULL) {
+        fprintf(stderr, "无法打开 /sys/class/uio 目录\n");
+        return -1;
+    }
+    
+    /* 遍历所有 uioX 目录，通过物理地址匹配 */
+    while ((entry = readdir(dp))) {
+        if (strncmp(entry->d_name, "uio", 3) != 0) continue;
         
-        int fd = open(uio_path, O_RDONLY);
-        if (fd < 0) continue;
+        /* 读取 map0/addr (物理地址) */
+        snprintf(addr_path, sizeof(addr_path), 
+                 "/sys/class/uio/%s/maps/map0/addr", entry->d_name);
         
-        ssize_t len = read(fd, uio_name, sizeof(uio_name) - 1);
-        close(fd);
+        FILE *f = fopen(addr_path, "r");
+        if (!f) continue;
         
-        if (len > 0) {
-            uio_name[len - 1] = '\0';  /* 去掉换行符 */
+        if (fgets(addr_str, sizeof(addr_str), f)) {
+            addr = strtoul(addr_str, NULL, 0);
             
-            /* 检查是否是VPSS（支持多种命名方式） */
-            if (strstr(uio_name, "v_proc_ss") || 
-                strstr(uio_name, "vpss") ||
-                strstr(uio_name, "VPSS") ||
-                strstr(uio_name, "video_proc")) {
-                snprintf(uio_path, sizeof(uio_path), "/dev/uio%d", i);
-                vpss->uio_fd = open(uio_path, O_RDWR);
+            /* 匹配VPSS物理地址 0x80000000 */
+            if (addr == VPSS_BASE_ADDR) {
+                char dev_path[64];
+                snprintf(dev_path, sizeof(dev_path), "/dev/%s", entry->d_name);
                 
+                printf("成功找到 VPSS: %s (物理地址 0x%08lX)\n", dev_path, addr);
+                
+                vpss->uio_fd = open(dev_path, O_RDWR);
                 if (vpss->uio_fd < 0) {
-                    fprintf(stderr, "打开%s失败: %s\n", uio_path, strerror(errno));
+                    fprintf(stderr, "无法打开设备 %s: %s\n", dev_path, strerror(errno));
+                    fclose(f);
+                    closedir(dp);
                     return -1;
                 }
                 
-                printf("找到VPSS UIO设备: %s (uio%d)\n", uio_name, i);
+                fclose(f);
+                closedir(dp);
                 return 0;
             }
         }
+        fclose(f);
     }
     
-    fprintf(stderr, "未找到VPSS UIO设备\n");
-    fprintf(stderr, "请检查设备树配置和UIO驱动\n");
-    fprintf(stderr, "提示: 运行 check_uio.sh 脚本检查UIO设备\n");
+    closedir(dp);
+    fprintf(stderr, "错误: 未找到物理地址为 0x%08X 的 VPSS UIO 设备\n", VPSS_BASE_ADDR);
+    fprintf(stderr, "请检查设备树配置，确保v_proc_ss使用generic-uio驱动\n");
     return -1;
 }
 

@@ -149,11 +149,12 @@ int vdma_init(vdma_control_t *vdma, int width, int height,
     
     /* 等待复位完成 */
     int timeout = 1000;
-    while ((*(volatile uint32_t*)(vdma->base_addr + VDMA_S2MM_CONTROL) & VDMA_CTRL_RESET) && timeout--) {
+    while ((*(volatile uint32_t*)(vdma->base_addr + VDMA_S2MM_CONTROL) & VDMA_CTRL_RESET) && timeout > 0) {
         usleep(100);
+        timeout--;
     }
     
-    if (timeout == 0) {
+    if (timeout <= 0) {
         fprintf(stderr, "VDMA复位超时\n");
         return -1;
     }

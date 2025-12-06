@@ -1,14 +1,20 @@
 # Makefile for UVC Camera and Network Stream Applications
-# PetaLinux/Yocto 环境专用版本
+# 支持 PetaLinux/Yocto 环境和本地编译
 # 
-# 重要说明：
-# 1. 本Makefile不设置CFLAGS和LDFLAGS，完全使用Recipe通过环境变量传递的值
-# 2. Recipe中的CFLAGS已经包含了系统头文件路径（如-I/usr/include等）
-# 3. 编译选项（如-Wall -O2 -std=c99）在Recipe中追加到CFLAGS
+# 使用方法：
+#   make network    - 仅编译网络传输程序
+#   make uvc        - 仅编译UVC程序
+#   make all        - 编译所有程序
+#   make clean      - 清理编译产物
 #
 # 目标程序：
 #   uvc-camera-app     - USB UVC视频传输
 #   network-stream-app - 网络视频流传输
+
+# 编译器设置（如果环境变量未定义，使用默认值）
+CC ?= gcc
+CFLAGS ?= -Wall -O2 -std=c99
+LDFLAGS ?=
 
 # 目标程序名
 TARGET_UVC = uvc-camera-app

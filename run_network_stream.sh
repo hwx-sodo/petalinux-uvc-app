@@ -142,7 +142,7 @@ echo "按 Enter 继续，或 Ctrl+C 取消..."
 read -r
 
 # 构建命令
-CMD="$APP_PATH -h $TARGET_IP -p $TARGET_PORT"
+CMD="$APP_PATH -H $TARGET_IP -p $TARGET_PORT"
 if [ "$PROTOCOL" = "tcp" ]; then
     CMD="$CMD -t"
 fi

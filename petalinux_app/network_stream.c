@@ -11,10 +11,11 @@
  * CameraLink(PL) → VPSS(YUV422→RGB) → VDMA → DDR(RGBA) → 网络 → PC
  * 
  * 使用方法：
- *   ./network-stream-app -h <PC_IP地址> [-p 端口] [-t tcp|udp]
+ *   ./network-stream-app -H <PC_IP地址> [-p 端口] [-t]
  * 
  * 示例：
- *   ./network-stream-app -h 10.72.43.219 -p 5000 -t udp
+ *   ./network-stream-app -H 10.72.43.219 -p 5000        # UDP模式
+ *   ./network-stream-app -H 10.72.43.219 -p 5000 -t     # TCP模式
  */
 
 #include <stdio.h>
@@ -188,6 +189,7 @@ int init_tcp_socket(const char *host, int port)
 
 /**
  * 发送帧头
+ * @return 1成功，0缓冲区满需跳过，-1错误
  */
 int send_frame_header(int sock, uint32_t frame_num)
 {
@@ -214,7 +216,7 @@ int send_frame_header(int sock, uint32_t frame_num)
         return -1;
     }
     
-    return 0;
+    return 1;  /* 成功 */
 }
 
 /**
@@ -223,8 +225,12 @@ int send_frame_header(int sock, uint32_t frame_num)
 int send_frame_udp(int sock, const uint8_t *data, size_t size, uint32_t frame_num)
 {
     /* 先发送帧头 */
-    if (send_frame_header(sock, frame_num) < 0) {
-        return -1;
+    int header_ret = send_frame_header(sock, frame_num);
+    if (header_ret < 0) {
+        return -1;  /* 发送错误 */
+    }
+    if (header_ret == 0) {
+        return 0;   /* 缓冲区满，跳过这帧 */
     }
     
     /* 分片发送帧数据 */
@@ -254,8 +260,12 @@ int send_frame_udp(int sock, const uint8_t *data, size_t size, uint32_t frame_nu
 int send_frame_tcp(int sock, const uint8_t *data, size_t size, uint32_t frame_num)
 {
     /* 先发送帧头 */
-    if (send_frame_header(sock, frame_num) < 0) {
-        return -1;
+    int header_ret = send_frame_header(sock, frame_num);
+    if (header_ret < 0) {
+        return -1;  /* 发送错误 */
+    }
+    if (header_ret == 0) {
+        return 0;   /* 缓冲区满，跳过这帧 */
     }
     
     /* 发送帧数据 */
@@ -350,13 +360,13 @@ void print_usage(const char *prog)
 {
     printf("用法: %s [选项]\n", prog);
     printf("\n选项:\n");
-    printf("  -h, --host <IP>      目标IP地址 (默认: %s)\n", DEFAULT_HOST);
+    printf("  -H, --host <IP>      目标IP地址 (默认: %s)\n", DEFAULT_HOST);
     printf("  -p, --port <端口>    目标端口 (默认: %d)\n", DEFAULT_PORT);
     printf("  -t, --tcp            使用TCP协议 (默认: UDP)\n");
-    printf("  -?, --help           显示帮助信息\n");
+    printf("  -h, --help           显示帮助信息\n");
     printf("\n示例:\n");
-    printf("  %s -h 10.72.43.219 -p 5000        # UDP模式\n", prog);
-    printf("  %s -h 10.72.43.219 -p 5000 -t     # TCP模式\n", prog);
+    printf("  %s -H 10.72.43.219 -p 5000        # UDP模式\n", prog);
+    printf("  %s -H 10.72.43.219 -p 5000 -t     # TCP模式\n", prog);
     printf("\n数据格式:\n");
     printf("  每帧数据 = 帧头(32字节) + RGBA像素数据(%d字节)\n", FRAME_SIZE);
 }
@@ -369,17 +379,17 @@ int main(int argc, char **argv)
     
     /* 解析命令行参数 */
     static struct option long_options[] = {
-        {"host", required_argument, 0, 'h'},
+        {"host", required_argument, 0, 'H'},
         {"port", required_argument, 0, 'p'},
         {"tcp",  no_argument,       0, 't'},
-        {"help", no_argument,       0, '?'},
+        {"help", no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
     
     int opt;
-    while ((opt = getopt_long(argc, argv, "h:p:t?", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "H:p:th", long_options, NULL)) != -1) {
         switch (opt) {
-            case 'h':
+            case 'H':
                 strncpy(target_host, optarg, sizeof(target_host) - 1);
                 break;
             case 'p':
@@ -388,6 +398,7 @@ int main(int argc, char **argv)
             case 't':
                 use_tcp = 1;
                 break;
+            case 'h':
             case '?':
             default:
                 print_usage(argv[0]);

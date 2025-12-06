@@ -300,7 +300,7 @@ python receive_stream.py -p 5000 -o output.avi
 sudo ./run_network_stream.sh 10.72.43.219
 
 # 或直接运行程序
-sudo ./network-stream-app -h 10.72.43.219 -p 5000
+sudo ./network-stream-app -H 10.72.43.219 -p 5000
 ```
 
 **看到以下输出表示成功：**
@@ -350,7 +350,7 @@ IR Camera over Ethernet
 
 | 参数 | 说明 | 示例 |
 |------|------|------|
-| `-h, --host` | PC的IP地址 | `-h 10.72.43.219` |
+| `-H, --host` | PC的IP地址 | `-H 10.72.43.219` |
 | `-p, --port` | 端口号 | `-p 5000` |
 | `-t, --tcp` | 使用TCP模式 | `-t` |
 
