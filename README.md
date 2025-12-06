@@ -71,9 +71,13 @@ pip install opencv-python numpy
 python receive_stream.py -p 5000
 ```
 
-**第2步：开发板启动发送**
+**第2步：开发板配置IP并启动发送**
 ```bash
-sudo ./run_network_stream.sh 192.168.1.100   # 替换为PC的IP
+# 配置开发板IP（首次需要）
+ifconfig eth0 10.72.43.10 netmask 255.255.0.0 up
+
+# 启动发送
+sudo ./run_network_stream.sh 10.72.43.219
 ```
 
 **第3步：查看视频**
@@ -85,7 +89,7 @@ sudo ./run_network_stream.sh 192.168.1.100   # 替换为PC的IP
 ```bash
 # TCP模式（可靠传输，两端都加-t）
 python receive_stream.py -p 5000 -t                    # PC端
-sudo ./run_network_stream.sh 192.168.1.100 5000 tcp    # 开发板
+sudo ./run_network_stream.sh 10.72.43.219 5000 tcp     # 开发板
 
 # 保存视频到文件
 python receive_stream.py -p 5000 -o output.avi

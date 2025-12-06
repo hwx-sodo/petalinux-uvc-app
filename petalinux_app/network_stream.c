@@ -14,7 +14,7 @@
  *   ./network-stream-app -h <PC_IP地址> [-p 端口] [-t tcp|udp]
  * 
  * 示例：
- *   ./network-stream-app -h 192.168.1.100 -p 5000 -t udp
+ *   ./network-stream-app -h 10.72.43.219 -p 5000 -t udp
  */
 
 #include <stdio.h>
@@ -355,8 +355,8 @@ void print_usage(const char *prog)
     printf("  -t, --tcp            使用TCP协议 (默认: UDP)\n");
     printf("  -?, --help           显示帮助信息\n");
     printf("\n示例:\n");
-    printf("  %s -h 192.168.1.100 -p 5000        # UDP模式\n", prog);
-    printf("  %s -h 192.168.1.100 -p 5000 -t     # TCP模式\n", prog);
+    printf("  %s -h 10.72.43.219 -p 5000        # UDP模式\n", prog);
+    printf("  %s -h 10.72.43.219 -p 5000 -t     # TCP模式\n", prog);
     printf("\n数据格式:\n");
     printf("  每帧数据 = 帧头(32字节) + RGBA像素数据(%d字节)\n", FRAME_SIZE);
 }

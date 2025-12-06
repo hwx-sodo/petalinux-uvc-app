@@ -279,7 +279,7 @@ ethtool eth0
 
 ```bash
 # 手动配置IP
-ifconfig eth0 192.168.1.10 netmask 255.255.255.0 up
+ifconfig eth0 10.72.43.10 netmask 255.255.0.0 up
 
 # 或使用DHCP
 udhcpc -i eth0
@@ -288,7 +288,7 @@ udhcpc -i eth0
 ### 6.4 测试连通性
 
 ```bash
-ping 192.168.1.100
+ping 10.72.43.219
 ```
 
 ---

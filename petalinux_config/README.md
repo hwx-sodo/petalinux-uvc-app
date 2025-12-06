@@ -197,11 +197,11 @@ Settings for eth0:
 ### 7.3 配置IP地址
 
 ```bash
-# 手动配置IP（修改为您的网络配置）
-ifconfig eth0 192.168.1.10 netmask 255.255.255.0 up
+# 手动配置IP
+ifconfig eth0 10.72.43.10 netmask 255.255.0.0 up
 
-# 添加默认网关（如果需要）
-route add default gw 192.168.1.1
+# 添加默认网关（如果需要访问外网）
+route add default gw 10.72.255.254
 
 # 或者使用DHCP自动获取
 udhcpc -i eth0
@@ -211,7 +211,7 @@ udhcpc -i eth0
 
 ```bash
 # Ping PC
-ping 192.168.1.100 -c 4
+ping 10.72.43.219 -c 4
 ```
 
 ---
@@ -229,7 +229,7 @@ python receive_stream.py -p 5000
 ### 8.2 在开发板上启动发送
 
 ```bash
-sudo ./run_network_stream.sh 192.168.1.100
+sudo ./run_network_stream.sh 10.72.43.219
 ```
 
 ---
@@ -342,7 +342,7 @@ petalinux-package --boot --fsbl images/linux/zynqmp_fsbl.elf \
 # 验证网络（开发板上）
 ifconfig -a
 ethtool eth0
-ping 192.168.1.100
+ping 10.72.43.219
 ```
 
 ---
