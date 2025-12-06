@@ -50,49 +50,45 @@ sudo /run_uvc.sh
 
 网络传输更加稳定，不需要特殊的USB配置，适合开发调试阶段。
 
-#### 1. 在PC端启动接收程序
+> 📖 **详细教程请查看**: [NETWORK_STREAMING_GUIDE.md](NETWORK_STREAMING_GUIDE.md)
 
-首先在PC上安装依赖：
+#### 软件依赖
+
+| 端 | 需要安装 | 说明 |
+|----|---------|------|
+| **PC端** | ✅ OpenCV + NumPy | 用于显示和保存视频 |
+| **开发板** | ❌ 不需要 | 纯C程序，无额外依赖 |
+
 ```bash
+# 只在PC上安装
 pip install opencv-python numpy
 ```
 
-然后运行接收程序：
-```bash
-# UDP模式（推荐，低延迟）
-python receive_stream.py -p 5000
+#### 快速开始（3步）
 
-# TCP模式（可靠传输）
-python receive_stream.py -p 5000 -t
+**第1步：PC端启动接收（⚠️ 必须先启动！）**
+```bash
+python receive_stream.py -p 5000
+```
+
+**第2步：开发板启动发送**
+```bash
+sudo ./run_network_stream.sh 192.168.1.100   # 替换为PC的IP
+```
+
+**第3步：查看视频**
+- PC上会弹出视频窗口
+- 按 'q' 键退出
+
+#### 其他选项
+
+```bash
+# TCP模式（可靠传输，两端都加-t）
+python receive_stream.py -p 5000 -t                    # PC端
+sudo ./run_network_stream.sh 192.168.1.100 5000 tcp    # 开发板
 
 # 保存视频到文件
 python receive_stream.py -p 5000 -o output.avi
-```
-
-#### 2. 在ZynqMP开发板上启动发送
-
-```bash
-# 使用启动脚本（推荐）
-sudo ./run_network_stream.sh 192.168.1.100       # UDP模式
-sudo ./run_network_stream.sh 192.168.1.100 5000 tcp  # TCP模式
-
-# 或者直接运行程序
-sudo network-stream-app -h 192.168.1.100 -p 5000     # UDP
-sudo network-stream-app -h 192.168.1.100 -p 5000 -t  # TCP
-```
-
-> **注意**: 将 `192.168.1.100` 替换为您PC的实际IP地址
-
-#### 3. 网络配置示例
-
-确保开发板和PC在同一网络：
-
-```bash
-# 在开发板上配置IP（如果需要）
-ifconfig eth0 192.168.1.10 netmask 255.255.255.0
-
-# 测试连通性
-ping 192.168.1.100
 ```
 
 ## 常见问题
