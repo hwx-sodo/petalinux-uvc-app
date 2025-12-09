@@ -125,6 +125,37 @@ make help      # 显示帮助信息
 
 ## 常见问题
 
+### 0. 以太网PHY检测失败（MDIO device is missing）
+
+如果dmesg显示：
+```
+mdio_bus ff0e0000.ethernet-ffffffff: MDIO device at address 3 is missing.
+```
+
+**可能原因：**
+- PHY地址配置错误
+- PHY需要GPIO复位
+- Micrel PHY驱动未编译进内核
+
+**快速排查：**
+```bash
+# 查看MDIO设备
+ls /sys/bus/mdio_bus/devices/
+
+# 查看PHY驱动
+dmesg | grep -i "phy\|micrel\|ksz"
+
+# 检查内核是否启用Micrel PHY
+zcat /proc/config.gz | grep MICREL
+```
+
+**解决方案：**
+1. 尝试使用 `petalinux_config/system-user-auto-scan.dtsi`（自动扫描PHY）
+2. 或使用 `petalinux_config/system-user-phy-reset.dtsi`（添加GPIO复位）
+3. 确保内核配置中启用了 `Micrel PHYs` 驱动
+
+详细调试请参考：[ETHERNET_DEBUG_GUIDE.md](docs/ETHERNET_DEBUG_GUIDE.md)
+
 ### 1. 接收端收不到数据
 
 **排查步骤:**

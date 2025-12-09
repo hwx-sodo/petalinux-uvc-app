@@ -8,9 +8,30 @@
 
 ```
 petalinux_config/
-├── system-user.dtsi    # 设备树配置（复制到项目中）
-└── README.md           # 本文档
+├── system-user.dtsi              # 标准配置（PHY地址3）
+├── system-user-auto-scan.dtsi    # 自动扫描PHY版本
+├── system-user-phy-reset.dtsi    # 带GPIO复位版本
+├── system-user-generic-phy.dtsi  # 通用PHY驱动版本
+└── README.md                     # 本文档
 ```
+
+### 如何选择配置文件
+
+| 情况 | 使用的配置文件 |
+|------|---------------|
+| PHY地址确定是3 | `system-user.dtsi` |
+| 不确定PHY地址 | `system-user-auto-scan.dtsi` |
+| PHY需要GPIO复位 | `system-user-phy-reset.dtsi` |
+| Micrel驱动有问题 | `system-user-generic-phy.dtsi` |
+
+### ⚠️ 常见问题：MDIO device is missing
+
+如果dmesg显示：
+```
+mdio_bus ff0e0000.ethernet-ffffffff: MDIO device at address 3 is missing.
+```
+
+请参考 `docs/ETHERNET_DEBUG_GUIDE.md` 进行诊断。
 
 ---
 
