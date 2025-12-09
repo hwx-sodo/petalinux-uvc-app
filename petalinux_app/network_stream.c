@@ -45,7 +45,7 @@
 #define FRAME_SIZE      (VIDEO_WIDTH * VIDEO_HEIGHT * BYTES_PER_PIXEL)
 
 /* 帧缓冲物理地址 */
-#define FRAME_BUFFER_PHYS   0x20000000
+#define FRAME_BUFFER_PHYS   0x70000000  /* 与设备树reserved_memory一致 */
 
 /* 默认网络参数 */
 #define DEFAULT_PORT        5000

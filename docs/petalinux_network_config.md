@@ -63,15 +63,19 @@
 };
 
 /* ========== 保留内存用于视频缓冲 ========== */
+/* 
+ * 重要：不能使用 0x20000000，因为U-Boot使用该地址加载boot.scr
+ * 否则会出现 "Reading file would overwrite reserved memory" 错误
+ */
 &reserved_memory {
     #address-cells = <2>;
     #size-cells = <2>;
     ranges;
     
     /* 视频帧缓冲区 - 用于VDMA */
-    video_buffer: video_buffer@20000000 {
+    video_buffer: video_buffer@70000000 {
         compatible = "shared-dma-pool";
-        reg = <0x0 0x20000000 0x0 0x10000000>;  /* 256MB at 0x20000000 */
+        reg = <0x0 0x70000000 0x0 0x10000000>;  /* 256MB at 0x70000000 (1.75GB) */
         no-map;
     };
 };
