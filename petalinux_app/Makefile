@@ -1,15 +1,14 @@
-# Makefile for UVC Camera and Network Stream Applications
+# Makefile for Ethernet Camera Application
 # 支持 PetaLinux/Yocto 环境和本地编译
 # 
 # 使用方法：
-#   make network    - 仅编译网络传输程序
-#   make uvc        - 仅编译UVC程序
-#   make all        - 编译所有程序
-#   make clean      - 清理编译产物
+#   make           - 编译eth-camera-app
+#   make all       - 编译eth-camera-app
+#   make clean     - 清理编译产物
+#   make install   - 安装到目标系统
 #
 # 目标程序：
-#   uvc-camera-app     - USB UVC视频传输
-#   network-stream-app - 网络视频流传输
+#   eth-camera-app - 以太网视频流传输
 
 # 编译器设置（如果环境变量未定义，使用默认值）
 CC ?= gcc
@@ -17,65 +16,53 @@ CFLAGS ?= -Wall -O2 -std=c99
 LDFLAGS ?=
 
 # 目标程序名
-TARGET_UVC = uvc-camera-app
-TARGET_NET = network-stream-app
+TARGET = eth-camera-app
 
-# 共享源文件
-COMMON_SRCS = vpss_control.c vdma_control.c
-COMMON_OBJS = $(COMMON_SRCS:.c=.o)
+# 源文件
+SRCS = network_stream.c vpss_control.c vdma_control.c
+OBJS = $(SRCS:.c=.o)
 
-# UVC应用源文件
-UVC_SRCS = main.c
-UVC_OBJS = $(UVC_SRCS:.c=.o)
+# 头文件依赖
+DEPS = vpss_control.h vdma_control.h
 
-# 网络应用源文件
-NET_SRCS = network_stream.c
-NET_OBJS = $(NET_SRCS:.c=.o)
+# 默认目标
+all: $(TARGET)
 
-# 默认目标：编译所有程序
-all: $(TARGET_UVC) $(TARGET_NET)
-
-# 仅编译UVC应用
-uvc: $(TARGET_UVC)
-
-# 仅编译网络应用
-network: $(TARGET_NET)
-
-# 链接UVC程序
-$(TARGET_UVC): $(UVC_OBJS) $(COMMON_OBJS)
+# 链接程序
+$(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
-	@echo "编译完成: $(TARGET_UVC)"
-
-# 链接网络程序
-$(TARGET_NET): $(NET_OBJS) $(COMMON_OBJS)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
-	@echo "编译完成: $(TARGET_NET)"
+	@echo "========================================="
+	@echo "编译完成: $(TARGET)"
+	@echo "========================================="
 
 # 编译源文件
 # CFLAGS由Recipe通过环境变量传递，包含：
 # - 系统头文件路径（-I/usr/include等）
 # - 编译选项（-Wall -O2 -std=c99等）
-%.o: %.c
+%.o: %.c $(DEPS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # 清理
 clean:
-	rm -f $(TARGET_UVC) $(TARGET_NET) $(COMMON_OBJS) $(UVC_OBJS) $(NET_OBJS)
+	rm -f $(TARGET) $(OBJS)
 	@echo "清理完成"
 
-# 安装所有程序
-install: install-uvc install-network
-
-# 安装UVC程序
-install-uvc: $(TARGET_UVC)
+# 安装程序
+install: $(TARGET)
 	install -d $(DESTDIR)/usr/bin
-	install -m 0755 $(TARGET_UVC) $(DESTDIR)/usr/bin/
-	@echo "安装完成: $(DESTDIR)/usr/bin/$(TARGET_UVC)"
+	install -m 0755 $(TARGET) $(DESTDIR)/usr/bin/
+	@echo "安装完成: $(DESTDIR)/usr/bin/$(TARGET)"
 
-# 安装网络程序
-install-network: $(TARGET_NET)
-	install -d $(DESTDIR)/usr/bin
-	install -m 0755 $(TARGET_NET) $(DESTDIR)/usr/bin/
-	@echo "安装完成: $(DESTDIR)/usr/bin/$(TARGET_NET)"
+# 显示帮助信息
+help:
+	@echo "可用目标:"
+	@echo "  all     - 编译 $(TARGET)"
+	@echo "  clean   - 清理编译产物"
+	@echo "  install - 安装到 \$$(DESTDIR)/usr/bin/"
+	@echo "  help    - 显示此帮助信息"
+	@echo ""
+	@echo "编译示例:"
+	@echo "  make                    # 使用默认编译器"
+	@echo "  make CC=aarch64-linux-gnu-gcc  # 使用交叉编译器"
 
-.PHONY: all uvc network clean install install-uvc install-network
+.PHONY: all clean install help
