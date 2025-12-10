@@ -38,18 +38,18 @@ if [ $# -lt 1 ]; then
     echo "  端口      网络端口（默认: ${DEFAULT_PORT}）"
     echo "  协议      udp 或 tcp（默认: ${DEFAULT_PROTOCOL}）"
     echo ""
-echo "示例:"
-echo "  $0 10.72.43.219"
-echo "  $0 10.72.43.219 8000"
-echo "  $0 10.72.43.219 5000 tcp"
-echo ""
-echo "PC端接收命令:"
-echo "  python receive_stream.py -p 5000        # UDP模式"
-echo "  python receive_stream.py -p 5000 -t     # TCP模式"
-echo ""
-echo "开发板IP配置:"
-echo "  ifconfig eth0 ${BOARD_IP} netmask ${NETMASK} up"
-exit 1
+    echo "示例:"
+    echo "  $0 10.72.43.219"
+    echo "  $0 10.72.43.219 8000"
+    echo "  $0 10.72.43.219 5000 tcp"
+    echo ""
+    echo "PC端接收命令:"
+    echo "  python receive_stream.py -p 5000        # UDP模式"
+    echo "  python receive_stream.py -p 5000 -t     # TCP模式"
+    echo ""
+    echo "开发板IP配置:"
+    echo "  ifconfig eth0 ${BOARD_IP} netmask ${NETMASK} up"
+    exit 1
 fi
 
 TARGET_IP=$1
