@@ -7,49 +7,19 @@
  * PHY: KSZ9031RNX (Micrel/Microchip)
  * 接口: RGMII
  * PHY地址: 3
+ * MAC地址: 00:0a:35:00:22:01
  * ============================================================ */
 &gem3 {
-    status = "okay";
+    local-mac-address = [00 0a 35 00 22 01];
     phy-mode = "rgmii-id";
+    status = "okay";
+    xlnx,ptp-enet-clock = <0x69f6bcb>;
     phy-handle = <&phy3>;
     
-    /* MDIO 总线 */
-    mdio: mdio {
-        #address-cells = <1>;
-        #size-cells = <0>;
-        
-        /* KSZ9031RNX PHY @ 地址 3 */
-        phy3: ethernet-phy@3 {
-            reg = <3>;
-            compatible = "micrel,ksz9031", "ethernet-phy-ieee802.3-c22";
-            
-            /* 
-             * KSZ9031 RGMII 时序调整
-             * 根据PCB走线可能需要微调这些值
-             * 如果网络不稳定，可以尝试注释掉或调整
-             */
-            
-            /* RX 数据线延迟 (RXD0-RXD3) */
-            rxc-skew-ps = <900>;      /* RX 时钟偏移 */
-            rxdv-skew-ps = <0>;       /* RX_DV 偏移 */
-            rxd0-skew-ps = <0>;
-            rxd1-skew-ps = <0>;
-            rxd2-skew-ps = <0>;
-            rxd3-skew-ps = <0>;
-            
-            /* TX 数据线延迟 (TXD0-TXD3) */
-            txc-skew-ps = <900>;      /* TX 时钟偏移 */
-            txen-skew-ps = <0>;       /* TX_EN 偏移 */
-            txd0-skew-ps = <0>;
-            txd1-skew-ps = <0>;
-            txd2-skew-ps = <0>;
-            txd3-skew-ps = <0>;
-            
-            /* 可选：PHY复位GPIO（如果硬件连接了复位引脚，取消注释并修改GPIO号）*/
-            /* reset-gpios = <&gpio 38 GPIO_ACTIVE_LOW>; */
-            /* reset-assert-us = <10000>; */
-            /* reset-deassert-us = <300>; */
-        };
+    phy3: phy@3 {
+        device_type = "ethernet-phy";
+        xlnx,phy-type = <5>;
+        reg = <3>;
     };
 };
 
