@@ -91,6 +91,7 @@ static int target_port = DEFAULT_PORT;
 static int use_tcp = 0;  /* 0=UDP, 1=TCP */
 static int debug_mode = 0;  /* 调试模式：打印更多信息 */
 static int force_send = 0;  /* 强制发送模式：忽略帧变化检测 */
+static int diag_only = 0;   /* 仅诊断模式：不进行网络传输 */
 
 /* ==================== 信号处理 ==================== */
 
@@ -288,6 +289,193 @@ int send_frame_tcp(int sock, const uint8_t *data, size_t size, uint32_t frame_nu
     return 0;
 }
 
+/* ==================== 诊断函数 ==================== */
+
+/**
+ * 打印VDMA寄存器状态（诊断用）
+ */
+void dump_vdma_registers(vdma_control_t *vdma)
+{
+    printf("\n====== VDMA 寄存器诊断 ======\n");
+    
+    volatile uint32_t *base = (volatile uint32_t*)vdma->base_addr;
+    
+    /* S2MM (Write Channel) 寄存器 */
+    uint32_t s2mm_ctrl = *(base + 0x30/4);
+    uint32_t s2mm_status = *(base + 0x34/4);
+    uint32_t s2mm_vsize = *(base + 0xA0/4);
+    uint32_t s2mm_hsize = *(base + 0xA4/4);
+    uint32_t s2mm_stride = *(base + 0xA8/4);
+    uint32_t s2mm_addr1 = *(base + 0xAC/4);
+    uint32_t s2mm_addr2 = *(base + 0xB0/4);
+    uint32_t s2mm_addr3 = *(base + 0xB4/4);
+    
+    printf("S2MM Control  (0x30): 0x%08X\n", s2mm_ctrl);
+    printf("  - Run: %d, Circular: %d, Reset: %d, GenLock: %d\n",
+           (s2mm_ctrl >> 0) & 1, (s2mm_ctrl >> 1) & 1,
+           (s2mm_ctrl >> 2) & 1, (s2mm_ctrl >> 3) & 1);
+    
+    printf("S2MM Status   (0x34): 0x%08X\n", s2mm_status);
+    printf("  - Halted: %d, Idle: %d, SGIncld: %d, DMAIntErr: %d\n",
+           (s2mm_status >> 0) & 1, (s2mm_status >> 1) & 1,
+           (s2mm_status >> 3) & 1, (s2mm_status >> 4) & 1);
+    printf("  - DMASlvErr: %d, DMADecErr: %d, SOFEarlyErr: %d\n",
+           (s2mm_status >> 5) & 1, (s2mm_status >> 6) & 1,
+           (s2mm_status >> 7) & 1);
+    printf("  - FrameCount: %d, DelayCount: %d\n",
+           (s2mm_status >> 16) & 0xFF, (s2mm_status >> 24) & 0xFF);
+    
+    printf("S2MM VSize    (0xA0): %d (期望: %d)\n", s2mm_vsize, vdma->height);
+    printf("S2MM HSize    (0xA4): %d (期望: %d)\n", s2mm_hsize, vdma->width * vdma->bytes_per_pixel);
+    printf("S2MM Stride   (0xA8): %d\n", s2mm_stride);
+    printf("S2MM Addr1    (0xAC): 0x%08X\n", s2mm_addr1);
+    printf("S2MM Addr2    (0xB0): 0x%08X\n", s2mm_addr2);
+    printf("S2MM Addr3    (0xB4): 0x%08X\n", s2mm_addr3);
+    
+    /* 检查关键问题 */
+    printf("\n====== 诊断结果 ======\n");
+    
+    if (s2mm_status & 0x01) {
+        printf("❌ VDMA处于HALTED状态！可能原因:\n");
+        printf("   - 没有视频输入信号\n");
+        printf("   - AXI Stream时序错误\n");
+        printf("   - 复位未完成\n");
+    }
+    
+    if (s2mm_status & 0x10) {
+        printf("❌ DMA内部错误！检查AXI总线\n");
+    }
+    
+    if (s2mm_status & 0x20) {
+        printf("❌ DMA从设备错误！检查DDR访问\n");
+    }
+    
+    if (s2mm_status & 0x40) {
+        printf("❌ DMA解码错误！地址可能无效\n");
+    }
+    
+    if ((s2mm_ctrl & 0x01) == 0) {
+        printf("❌ VDMA未启动！Run位为0\n");
+    }
+    
+    if (s2mm_addr1 != vdma->frame_buffer_phys) {
+        printf("⚠ 帧缓冲地址不匹配: 寄存器=0x%08X, 期望=0x%08X\n",
+               s2mm_addr1, vdma->frame_buffer_phys);
+    }
+    
+    uint32_t frame_count = (s2mm_status >> 16) & 0xFF;
+    printf("📊 帧计数器: %d\n", frame_count);
+    
+    if (!(s2mm_status & 0x01) && (s2mm_ctrl & 0x01)) {
+        printf("✓ VDMA正在运行\n");
+    }
+    
+    printf("==============================\n\n");
+}
+
+/**
+ * 打印VPSS寄存器状态（诊断用）
+ */
+void dump_vpss_registers(vpss_control_t *vpss)
+{
+    printf("\n====== VPSS 寄存器诊断 ======\n");
+    
+    volatile uint32_t *base = (volatile uint32_t*)vpss->base_addr;
+    
+    uint32_t ctrl = *(base + 0x00/4);
+    uint32_t status = *(base + 0x04/4);
+    uint32_t error = *(base + 0x08/4);
+    uint32_t version = *(base + 0x10/4);
+    
+    printf("Control  (0x00): 0x%08X\n", ctrl);
+    printf("  - Start: %d, AutoRestart: %d\n",
+           (ctrl >> 0) & 1, (ctrl >> 7) & 1);
+    
+    printf("Status   (0x04): 0x%08X\n", status);
+    printf("  - Done: %d, Idle: %d, Ready: %d\n",
+           (status >> 0) & 1, (status >> 1) & 1, (status >> 2) & 1);
+    
+    printf("Error    (0x08): 0x%08X\n", error);
+    if (error != 0) {
+        printf("  ❌ 存在错误！\n");
+    }
+    
+    printf("Version  (0x10): 0x%08X\n", version);
+    
+    printf("==============================\n\n");
+}
+
+/**
+ * 检查帧缓冲区内容
+ */
+void check_frame_buffer(vdma_control_t *vdma)
+{
+    printf("\n====== 帧缓冲区诊断 ======\n");
+    
+    uint8_t *fb = (uint8_t*)vdma->frame_buffer;
+    int frame_size = vdma->width * vdma->height * vdma->bytes_per_pixel;
+    
+    /* 检查3个帧缓冲区的多个位置 */
+    for (int frame = 0; frame < vdma->num_frames; frame++) {
+        uint8_t *frame_start = fb + frame * frame_size;
+        
+        printf("帧缓冲 #%d (物理地址: 0x%08X):\n", 
+               frame, vdma->frame_buffer_phys + frame * frame_size);
+        
+        /* 检查开头 */
+        printf("  开头16字节: ");
+        int all_ff = 1, all_00 = 1;
+        for (int i = 0; i < 16; i++) {
+            printf("%02X ", frame_start[i]);
+            if (frame_start[i] != 0xFF) all_ff = 0;
+            if (frame_start[i] != 0x00) all_00 = 0;
+        }
+        printf("\n");
+        
+        /* 检查中间 */
+        int mid_offset = frame_size / 2;
+        printf("  中间16字节: ");
+        for (int i = 0; i < 16; i++) {
+            printf("%02X ", frame_start[mid_offset + i]);
+            if (frame_start[mid_offset + i] != 0xFF) all_ff = 0;
+            if (frame_start[mid_offset + i] != 0x00) all_00 = 0;
+        }
+        printf("\n");
+        
+        /* 检查末尾 */
+        int end_offset = frame_size - 16;
+        printf("  末尾16字节: ");
+        for (int i = 0; i < 16; i++) {
+            printf("%02X ", frame_start[end_offset + i]);
+            if (frame_start[end_offset + i] != 0xFF) all_ff = 0;
+            if (frame_start[end_offset + i] != 0x00) all_00 = 0;
+        }
+        printf("\n");
+        
+        /* 统计分析 */
+        int count_ff = 0, count_00 = 0;
+        for (int i = 0; i < frame_size; i += 1024) {  /* 每1KB采样一次 */
+            if (frame_start[i] == 0xFF) count_ff++;
+            if (frame_start[i] == 0x00) count_00++;
+        }
+        int samples = frame_size / 1024;
+        printf("  采样统计: 0xFF=%d/%d (%.1f%%), 0x00=%d/%d (%.1f%%)\n",
+               count_ff, samples, 100.0 * count_ff / samples,
+               count_00, samples, 100.0 * count_00 / samples);
+        
+        if (all_ff) {
+            printf("  ❌ 全是0xFF - VDMA未写入数据！\n");
+        } else if (all_00) {
+            printf("  ⚠ 全是0x00 - 可能是黑屏或无信号\n");
+        } else {
+            printf("  ✓ 有数据变化\n");
+        }
+        printf("\n");
+    }
+    
+    printf("==============================\n\n");
+}
+
 /* ==================== 主循环 ==================== */
 
 int main_loop()
@@ -415,18 +603,21 @@ void print_usage(const char *prog)
     printf("  -H, --host <IP>      目标IP地址 (默认: %s)\n", DEFAULT_HOST);
     printf("  -p, --port <端口>    目标端口 (默认: %d)\n", DEFAULT_PORT);
     printf("  -t, --tcp            使用TCP协议 (默认: UDP)\n");
-    printf("  -d, --debug          调试模式，打印更多信息\n");
+    printf("  -d, --debug          调试模式，打印详细诊断信息\n");
     printf("  -f, --force          强制发送模式，忽略帧变化检测\n");
+    printf("  -D, --diag           仅诊断模式，不进行网络传输\n");
     printf("  -h, --help           显示帮助信息\n");
     printf("\n示例:\n");
     printf("  %s -H 10.72.43.200 -p 5000        # UDP模式\n", prog);
     printf("  %s -H 10.72.43.200 -p 5000 -t     # TCP模式\n", prog);
     printf("  %s -H 10.72.43.200 -d -f          # 调试+强制发送模式\n", prog);
+    printf("  %s -D                             # 仅诊断，不传输\n", prog);
     printf("\n数据格式:\n");
     printf("  每帧数据 = 帧头(32字节) + RGBA像素数据(%d字节)\n", FRAME_SIZE);
     printf("\n调试选项说明:\n");
-    printf("  -d 调试模式: 打印VDMA状态、帧缓冲内容等调试信息\n");
+    printf("  -d 调试模式: 打印VDMA/VPSS寄存器状态、帧缓冲内容等\n");
     printf("  -f 强制发送: 即使VDMA帧号不变化也持续发送，用于测试网络\n");
+    printf("  -D 仅诊断:   初始化硬件后打印诊断信息，然后退出\n");
 }
 
 /* ==================== 主函数 ==================== */
@@ -442,12 +633,13 @@ int main(int argc, char **argv)
         {"tcp",   no_argument,       0, 't'},
         {"debug", no_argument,       0, 'd'},
         {"force", no_argument,       0, 'f'},
+        {"diag",  no_argument,       0, 'D'},
         {"help",  no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
     
     int opt;
-    while ((opt = getopt_long(argc, argv, "H:p:tdfh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "H:p:tdfDh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'H':
                 strncpy(target_host, optarg, sizeof(target_host) - 1);
@@ -463,6 +655,10 @@ int main(int argc, char **argv)
                 break;
             case 'f':
                 force_send = 1;
+                break;
+            case 'D':
+                diag_only = 1;
+                debug_mode = 1;  /* 诊断模式自动开启调试 */
                 break;
             case 'h':
             case '?':
@@ -520,6 +716,21 @@ int main(int argc, char **argv)
     /* 等待数据流稳定 */
     printf("\n等待视频流稳定...\n");
     sleep(1);
+    
+    /* 诊断模式：打印详细寄存器信息 */
+    if (debug_mode) {
+        dump_vpss_registers(&vpss);
+        dump_vdma_registers(&vdma);
+        check_frame_buffer(&vdma);
+    }
+    
+    /* 仅诊断模式：输出诊断后退出 */
+    if (diag_only) {
+        printf("\n====== 诊断完成 ======\n");
+        printf("使用 -d 参数（不带 -D）进行网络传输测试\n");
+        printf("使用 -d -f 参数强制发送即使帧缓冲无变化\n");
+        goto cleanup;
+    }
     
     /* 初始化网络 */
     printf("\n[5/5] 初始化网络连接...\n");

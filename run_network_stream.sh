@@ -43,6 +43,7 @@ if [ $# -lt 1 ]; then
     echo "选项（可在协议后添加）:"
     echo "  debug     调试模式，打印详细信息"
     echo "  force     强制发送模式，忽略帧变化检测"
+    echo "  diag      仅诊断模式，不进行网络传输"
     echo ""
     echo "示例:"
     echo "  $0 10.72.43.200"
@@ -51,6 +52,7 @@ if [ $# -lt 1 ]; then
     echo "  $0 10.72.43.200 5000 udp debug       # 调试模式"
     echo "  $0 10.72.43.200 5000 udp force       # 强制发送模式"
     echo "  $0 10.72.43.200 5000 udp debug force # 调试+强制"
+    echo "  $0 10.72.43.200 5000 udp diag        # 仅诊断硬件状态"
     echo ""
     echo "PC端接收命令:"
     echo "  python receive_stream.py -p 5000        # UDP模式"
@@ -67,6 +69,7 @@ TARGET_PORT=${2:-$DEFAULT_PORT}
 PROTOCOL=${3:-$DEFAULT_PROTOCOL}
 
 # 解析额外选项 (第4个及以后的参数)
+DIAG_MODE=""
 shift 3 2>/dev/null || true
 for arg in "$@"; do
     case "$arg" in
@@ -75,6 +78,9 @@ for arg in "$@"; do
             ;;
         force)
             FORCE_MODE="-f"
+            ;;
+        diag)
+            DIAG_MODE="-D"
             ;;
     esac
 done
@@ -107,6 +113,7 @@ echo "端口:   $TARGET_PORT"
 echo "协议:   $PROTOCOL"
 [ -n "$DEBUG_MODE" ] && echo "调试:   开启"
 [ -n "$FORCE_MODE" ] && echo "强制:   开启"
+[ -n "$DIAG_MODE" ] && echo "诊断:   仅诊断模式（不传输）"
 echo ""
 
 # 配置开发板IP（如果没有配置）
@@ -184,6 +191,7 @@ if [ "$PROTOCOL" = "tcp" ]; then
 fi
 [ -n "$DEBUG_MODE" ] && CMD="$CMD $DEBUG_MODE"
 [ -n "$FORCE_MODE" ] && CMD="$CMD $FORCE_MODE"
+[ -n "$DIAG_MODE" ] && CMD="$CMD $DIAG_MODE"
 
 echo ""
 echo "启动命令: $CMD"
