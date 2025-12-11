@@ -542,12 +542,38 @@ int main_loop()
         
         /* 调试：第一帧时打印帧数据信息 */
         if (debug_mode && frame_count == 0) {
-            printf("[DEBUG] 发送第一帧，读取帧缓冲 #%d\n", read_frame);
-            printf("[DEBUG] 帧数据前16字节: ");
+            printf("[DEBUG] 发送第一帧，读取帧缓冲 #%d (地址偏移: 0x%X)\n", 
+                   read_frame, read_frame * FRAME_SIZE);
+            printf("[DEBUG] 帧数据 开头16字节: ");
             for (int i = 0; i < 16; i++) {
                 printf("%02X ", rgba_frame[i]);
             }
             printf("\n");
+            
+            /* 检查中间部分 */
+            int mid_offset = FRAME_SIZE / 2;
+            printf("[DEBUG] 帧数据 中间16字节: ");
+            for (int i = 0; i < 16; i++) {
+                printf("%02X ", rgba_frame[mid_offset + i]);
+            }
+            printf("\n");
+            
+            /* 检查末尾部分 */
+            int end_offset = FRAME_SIZE - 16;
+            printf("[DEBUG] 帧数据 末尾16字节: ");
+            for (int i = 0; i < 16; i++) {
+                printf("%02X ", rgba_frame[end_offset + i]);
+            }
+            printf("\n");
+            
+            /* 统计非FF字节比例 */
+            int non_ff_count = 0;
+            for (int i = 0; i < FRAME_SIZE; i += 256) {
+                if (rgba_frame[i] != 0xFF) non_ff_count++;
+            }
+            int samples = FRAME_SIZE / 256;
+            printf("[DEBUG] 非0xFF数据比例: %d/%d (%.1f%%)\n", 
+                   non_ff_count, samples, 100.0 * non_ff_count / samples);
         }
         
         /* 发送帧 */
