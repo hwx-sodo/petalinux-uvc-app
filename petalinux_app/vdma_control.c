@@ -248,6 +248,14 @@ int vdma_stop(vdma_control_t *vdma)
 
 /**
  * 获取当前VDMA正在写入的帧编号
+ * 
+ * 注意：根据Xilinx AXI VDMA文档，S2MM Status Register (0x34)的位定义：
+ *   - 位0: Halted
+ *   - 位1: VDMAIntErr  
+ *   - 位4: VDMASlvErr
+ *   - 位5: VDMADecErr
+ *   - 位16-23: Frame_Count (当前帧号)
+ *   - 位24-31: Delay_Count
  */
 int vdma_get_current_frame(vdma_control_t *vdma)
 {
@@ -256,9 +264,11 @@ int vdma_get_current_frame(vdma_control_t *vdma)
     }
     
     uint32_t status = *(volatile uint32_t*)(vdma->base_addr + VDMA_S2MM_STATUS);
-    int frame = (status >> 24) & 0x3;  /* Frame Count字段（位24-25） */
+    /* Frame Count在位16-23，不是位24-25！ */
+    int frame = (status >> 16) & 0xFF;
     
-    return frame;
+    /* 限制在帧缓冲数量范围内 */
+    return frame % vdma->num_frames;
 }
 
 /**

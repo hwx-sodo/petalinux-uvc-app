@@ -322,7 +322,7 @@ void dump_vdma_registers(vdma_control_t *vdma)
     printf("  - DMASlvErr: %d, DMADecErr: %d, SOFEarlyErr: %d\n",
            (s2mm_status >> 5) & 1, (s2mm_status >> 6) & 1,
            (s2mm_status >> 7) & 1);
-    printf("  - FrameCount: %d, DelayCount: %d\n",
+    printf("  - FrameCount: %d (当前写入帧), DelayCount: %d\n",
            (s2mm_status >> 16) & 0xFF, (s2mm_status >> 24) & 0xFF);
     
     printf("S2MM VSize    (0xA0): %d (期望: %d)\n", s2mm_vsize, vdma->height);
