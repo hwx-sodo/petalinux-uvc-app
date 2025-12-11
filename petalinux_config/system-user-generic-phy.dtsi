@@ -3,41 +3,39 @@
 };
 
 /* ============================================================
- * GEM3 以太网配置
- * PHY: KSZ9031RNX (Micrel/Microchip)
- * 接口: RGMII
- * PHY地址: 3
- * MAC地址: 00:0a:35:00:22:01
+ * GEM3 以太网配置 - 通用PHY驱动版本
+ * 
+ * 使用场景：当Micrel特定驱动有问题时，使用通用PHY驱动
  * ============================================================ */
 &gem3 {
-    local-mac-address = [00 0a 35 00 22 01];
-    phy-mode = "rgmii-id";
     status = "okay";
-    xlnx,ptp-enet-clock = <0x69f6bcb>;
+    phy-mode = "rgmii-id";
     phy-handle = <&phy3>;
     
-    phy3: phy@3 {
-        device_type = "ethernet-phy";
-        xlnx,phy-type = <5>;
-        reg = <3>;
+    mdio: mdio {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        
+        /* 使用通用PHY兼容性字符串 */
+        phy3: ethernet-phy@3 {
+            reg = <3>;
+            /* 只使用通用兼容性，不指定具体芯片 */
+            compatible = "ethernet-phy-ieee802.3-c22";
+        };
     };
 };
 
 /* ============================================================
  * 保留内存配置 - 用于视频帧缓冲
- * 
- * 注意：不能使用 0x20000000，因为U-Boot使用该地址加载boot.scr
- * 移动到 0x70000000 避免冲突
  * ============================================================ */
 &reserved_memory {
     #address-cells = <2>;
     #size-cells = <2>;
     ranges;
     
-    /* 视频帧缓冲区 - VDMA使用 */
     video_buffer: video_buffer@70000000 {
         compatible = "shared-dma-pool";
-        reg = <0x0 0x70000000 0x0 0x10000000>;  /* 256MB @ 0x70000000 (1.75GB) */
+        reg = <0x0 0x70000000 0x0 0x10000000>;
         no-map;
     };
 };

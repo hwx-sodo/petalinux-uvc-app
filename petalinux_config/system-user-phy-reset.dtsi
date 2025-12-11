@@ -1,0 +1,86 @@
+/include/ "system-conf.dtsi"
+/ {
+};
+
+/* ============================================================
+ * GEM3 以太网配置 - 带PHY复位版本
+ * 
+ * 使用场景：PHY需要GPIO复位才能响应MDIO命令
+ * 
+ * 重要：请根据实际硬件修改 reset-gpios 中的GPIO编号！
+ * ============================================================ */
+&gem3 {
+    status = "okay";
+    phy-mode = "rgmii-id";
+    phy-handle = <&phy3>;
+    
+    mdio: mdio {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        
+        phy3: ethernet-phy@3 {
+            reg = <3>;
+            compatible = "micrel,ksz9031", "ethernet-phy-ieee802.3-c22";
+            
+            /* 
+             * PHY复位GPIO配置
+             * 
+             * 重要：请根据您的硬件原理图修改以下参数：
+             * - GPIO编号：38 需要改为实际连接的GPIO号
+             * - 极性：GPIO_ACTIVE_LOW (0) 或 GPIO_ACTIVE_HIGH (1)
+             * 
+             * 常见GPIO编号参考：
+             * - ZynqMP MIO GPIO: 0-77
+             * - ZynqMP EMIO GPIO: 78+
+             */
+            reset-gpios = <&gpio 38 0>;  /* GPIO 38, 低电平有效 */
+            reset-assert-us = <10000>;   /* 复位保持 10ms */
+            reset-deassert-us = <1000>;  /* 复位释放后等待 1ms */
+            
+            /* RGMII 时序调整 */
+            rxc-skew-ps = <900>;
+            rxdv-skew-ps = <0>;
+            rxd0-skew-ps = <0>;
+            rxd1-skew-ps = <0>;
+            rxd2-skew-ps = <0>;
+            rxd3-skew-ps = <0>;
+            txc-skew-ps = <900>;
+            txen-skew-ps = <0>;
+            txd0-skew-ps = <0>;
+            txd1-skew-ps = <0>;
+            txd2-skew-ps = <0>;
+            txd3-skew-ps = <0>;
+        };
+    };
+};
+
+/* ============================================================
+ * 保留内存配置 - 用于视频帧缓冲
+ * ============================================================ */
+&reserved_memory {
+    #address-cells = <2>;
+    #size-cells = <2>;
+    ranges;
+    
+    video_buffer: video_buffer@70000000 {
+        compatible = "shared-dma-pool";
+        reg = <0x0 0x70000000 0x0 0x10000000>;
+        no-map;
+    };
+};
+
+/* ============================================================
+ * VDMA 配置 - 使用UIO驱动
+ * ============================================================ */
+&axi_vdma_0 {
+    compatible = "generic-uio";
+    status = "okay";
+};
+
+/* ============================================================
+ * VPSS 配置 - 使用UIO驱动
+ * ============================================================ */
+&v_proc_ss_0 {
+    compatible = "generic-uio";
+    status = "okay";
+};

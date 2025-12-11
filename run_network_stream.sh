@@ -6,9 +6,9 @@
 #   ./run_network_stream.sh <PC的IP地址> [端口] [协议]
 #
 # 示例:
-#   ./run_network_stream.sh 10.72.43.219           # UDP模式，默认端口5000
-#   ./run_network_stream.sh 10.72.43.219 8000      # UDP模式，端口8000
-#   ./run_network_stream.sh 10.72.43.219 5000 tcp  # TCP模式
+#   ./run_network_stream.sh 10.72.43.200           # UDP模式，默认端口5000
+#   ./run_network_stream.sh 10.72.43.200 8000      # UDP模式，端口8000
+#   ./run_network_stream.sh 10.72.43.200 5000 tcp  # TCP模式
 #
 
 set -e
@@ -22,7 +22,7 @@ NC='\033[0m' # No Color
 # 默认参数
 DEFAULT_PORT=5000
 DEFAULT_PROTOCOL="udp"
-DEFAULT_PC_IP="10.72.43.219"    # PC的IP地址
+DEFAULT_PC_IP="10.72.43.200"    # PC的IP地址
 BOARD_IP="10.72.43.10"          # 开发板的IP地址
 NETMASK="255.255.0.0"           # 子网掩码
 APP_PATH="/usr/bin/network-stream-app"
@@ -38,18 +38,18 @@ if [ $# -lt 1 ]; then
     echo "  端口      网络端口（默认: ${DEFAULT_PORT}）"
     echo "  协议      udp 或 tcp（默认: ${DEFAULT_PROTOCOL}）"
     echo ""
-echo "示例:"
-echo "  $0 10.72.43.219"
-echo "  $0 10.72.43.219 8000"
-echo "  $0 10.72.43.219 5000 tcp"
-echo ""
-echo "PC端接收命令:"
-echo "  python receive_stream.py -p 5000        # UDP模式"
-echo "  python receive_stream.py -p 5000 -t     # TCP模式"
-echo ""
-echo "开发板IP配置:"
-echo "  ifconfig eth0 ${BOARD_IP} netmask ${NETMASK} up"
-exit 1
+    echo "示例:"
+    echo "  $0 10.72.43.200"
+    echo "  $0 10.72.43.200 8000"
+    echo "  $0 10.72.43.200 5000 tcp"
+    echo ""
+    echo "PC端接收命令:"
+    echo "  python receive_stream.py -p 5000        # UDP模式"
+    echo "  python receive_stream.py -p 5000 -t     # TCP模式"
+    echo ""
+    echo "开发板IP配置:"
+    echo "  ifconfig eth0 ${BOARD_IP} netmask ${NETMASK} up"
+    exit 1
 fi
 
 TARGET_IP=$1
@@ -118,7 +118,7 @@ if [ ! -f "$APP_PATH" ]; then
         echo -e "${RED}错误: 找不到 network-stream-app${NC}"
         echo "请先编译应用程序:"
         echo "  cd /path/to/petalinux_app"
-        echo "  make network-stream-app"
+        echo "  make eth-camera-app"
         exit 1
     fi
 fi
