@@ -77,11 +77,12 @@ class FrameHeader:
 class VideoReceiver:
     """视频流接收器"""
     
-    def __init__(self, port, use_tcp=False, output_file=None, debug=False):
+    def __init__(self, port, use_tcp=False, output_file=None, debug=False, color_mode='rgba'):
         self.port = port
         self.use_tcp = use_tcp
         self.output_file = output_file
         self.debug = debug
+        self.color_mode = color_mode  # 颜色模式: rgba, bgra, rgb, gray
         
         self.running = False
         self.sock = None
@@ -164,8 +165,24 @@ class VideoReceiver:
                     if HAS_OPENCV:
                         rgba = np.frombuffer(frame, dtype=np.uint8).reshape(
                             (VIDEO_HEIGHT, VIDEO_WIDTH, 4))
-                        # RGBA转BGR（OpenCV格式）
-                        bgr = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
+                        
+                        # 根据格式选择转换方式
+                        # 方式1: RGBA -> BGR (默认)
+                        # 方式2: BGRA -> BGR
+                        # 方式3: 直接取前3通道
+                        if self.color_mode == 'rgba':
+                            bgr = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
+                        elif self.color_mode == 'bgra':
+                            bgr = cv2.cvtColor(rgba, cv2.COLOR_BGRA2BGR)
+                        elif self.color_mode == 'rgb':
+                            # 忽略Alpha通道，直接RGB->BGR
+                            bgr = cv2.cvtColor(rgba[:,:,:3], cv2.COLOR_RGB2BGR)
+                        elif self.color_mode == 'gray':
+                            # 只取第一个通道作为灰度图
+                            gray = rgba[:,:,0]
+                            bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+                        else:
+                            bgr = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
                         
                         try:
                             self.frame_queue.put_nowait(bgr)
@@ -395,6 +412,9 @@ def main():
                         help='输出视频文件 (如: output.avi)')
     parser.add_argument('-d', '--debug', action='store_true',
                         help='调试模式，打印详细信息')
+    parser.add_argument('-c', '--color', type=str, default='rgba',
+                        choices=['rgba', 'bgra', 'rgb', 'gray'],
+                        help='颜色模式: rgba(默认), bgra, rgb, gray')
     
     args = parser.parse_args()
     
@@ -405,10 +425,11 @@ def main():
     print(f"端口: {args.port}")
     print(f"输出: {args.output if args.output else '无'}")
     print(f"调试: {'开启' if args.debug else '关闭'}")
+    print(f"颜色: {args.color}")
     print(f"OpenCV: {'已安装' if HAS_OPENCV else '未安装'}")
     print("=" * 50 + "\n")
     
-    receiver = VideoReceiver(args.port, args.tcp, args.output, args.debug)
+    receiver = VideoReceiver(args.port, args.tcp, args.output, args.debug, args.color)
     
     # 如果需要保存视频
     if args.output and HAS_OPENCV:
