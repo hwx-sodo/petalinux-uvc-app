@@ -167,19 +167,35 @@ class VideoReceiver:
                             (VIDEO_HEIGHT, VIDEO_WIDTH, 4))
                         
                         # 根据格式选择转换方式
-                        # 方式1: RGBA -> BGR (默认)
-                        # 方式2: BGRA -> BGR
-                        # 方式3: 直接取前3通道
+                        # 数据格式说明:
+                        #   rgba: 字节顺序 R,G,B,A
+                        #   bgra: 字节顺序 B,G,R,A
+                        #   argb: 字节顺序 A,R,G,B (IR相机格式 {FF,RR,GG,BB})
+                        #   rgb:  忽略第4字节，按R,G,B处理
+                        #   gray: 只取第一个通道作为灰度
                         if self.color_mode == 'rgba':
                             bgr = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
                         elif self.color_mode == 'bgra':
                             bgr = cv2.cvtColor(rgba, cv2.COLOR_BGRA2BGR)
+                        elif self.color_mode == 'argb':
+                            # ARGB格式: {A,R,G,B} -> 需要重排为 {R,G,B,A} 再转BGR
+                            # 字节0=A, 字节1=R, 字节2=G, 字节3=B
+                            argb = rgba  # 实际是ARGB数据
+                            # 重排通道: A,R,G,B -> B,G,R (忽略A)
+                            bgr = np.zeros((VIDEO_HEIGHT, VIDEO_WIDTH, 3), dtype=np.uint8)
+                            bgr[:,:,0] = argb[:,:,3]  # B
+                            bgr[:,:,1] = argb[:,:,2]  # G
+                            bgr[:,:,2] = argb[:,:,1]  # R
                         elif self.color_mode == 'rgb':
                             # 忽略Alpha通道，直接RGB->BGR
                             bgr = cv2.cvtColor(rgba[:,:,:3], cv2.COLOR_RGB2BGR)
                         elif self.color_mode == 'gray':
                             # 只取第一个通道作为灰度图
                             gray = rgba[:,:,0]
+                            bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+                        elif self.color_mode == 'gray2':
+                            # 取第二个通道作为灰度图 (如果是ARGB，这是R通道)
+                            gray = rgba[:,:,1]
                             bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
                         else:
                             bgr = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
@@ -413,8 +429,8 @@ def main():
     parser.add_argument('-d', '--debug', action='store_true',
                         help='调试模式，打印详细信息')
     parser.add_argument('-c', '--color', type=str, default='rgba',
-                        choices=['rgba', 'bgra', 'rgb', 'gray'],
-                        help='颜色模式: rgba(默认), bgra, rgb, gray')
+                        choices=['rgba', 'bgra', 'argb', 'rgb', 'gray', 'gray2'],
+                        help='颜色模式: rgba(默认), bgra, argb({FF,RR,GG,BB}), rgb, gray, gray2')
     
     args = parser.parse_args()
     
