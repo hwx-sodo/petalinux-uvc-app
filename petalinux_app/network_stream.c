@@ -89,6 +89,8 @@ static int sock_fd = -1;
 static char target_host[256] = DEFAULT_HOST;
 static int target_port = DEFAULT_PORT;
 static int use_tcp = 0;  /* 0=UDP, 1=TCP */
+static int debug_mode = 0;  /* 调试模式：打印更多信息 */
+static int force_send = 0;  /* 强制发送模式：忽略帧变化检测 */
 
 /* ==================== 信号处理 ==================== */
 
@@ -292,15 +294,34 @@ int main_loop()
 {
     int frame_count = 0;
     int last_vdma_frame = -1;
-    struct timespec start_time, current_time;
+    int skipped_frames = 0;  /* 跳过的帧数（帧号未变化） */
+    struct timespec start_time, current_time, last_status_time;
     clock_gettime(CLOCK_MONOTONIC, &start_time);
+    last_status_time = start_time;
     
     printf("\n开始网络视频流传输...\n");
     printf("分辨率: %dx%d@%dfps (RGBA格式)\n", VIDEO_WIDTH, VIDEO_HEIGHT, TARGET_FPS);
     printf("协议: %s, 目标: %s:%d\n", use_tcp ? "TCP" : "UDP", target_host, target_port);
     printf("帧大小: %d bytes (%.2f MB/s)\n", FRAME_SIZE, 
            (float)FRAME_SIZE * TARGET_FPS / 1024 / 1024);
+    printf("调试模式: %s\n", debug_mode ? "开启" : "关闭");
+    printf("强制发送: %s\n", force_send ? "开启（忽略帧变化检测）" : "关闭");
     printf("按Ctrl+C退出\n\n");
+    
+    /* 调试：打印初始VDMA状态 */
+    if (debug_mode) {
+        uint32_t vdma_status = *(volatile uint32_t*)(vdma.base_addr + 0x34);
+        printf("[DEBUG] 初始VDMA状态: 0x%08X, 帧号: %d\n", 
+               vdma_status, vdma_get_current_frame(&vdma));
+        
+        /* 检查帧缓冲前16字节 */
+        const uint8_t *fb = (uint8_t*)vdma.frame_buffer;
+        printf("[DEBUG] 帧缓冲前16字节: ");
+        for (int i = 0; i < 16; i++) {
+            printf("%02X ", fb[i]);
+        }
+        printf("\n");
+    }
     
     while (running) {
         /* 获取VDMA当前写入的帧 */
@@ -309,15 +330,37 @@ int main_loop()
         /* 选择一个不同的帧读取 */
         int read_frame = (current_vdma_frame + 1) % NUM_FRAMES;
         
-        /* 如果帧没有变化，跳过 */
+        /* 如果帧没有变化，根据模式决定是否跳过 */
         if (current_vdma_frame == last_vdma_frame && frame_count > 0) {
-            usleep(1000);
-            continue;
+            if (!force_send) {
+                /* 非强制模式：跳过未变化的帧 */
+                skipped_frames++;
+                
+                /* 调试：每1000次跳过打印一次 */
+                if (debug_mode && skipped_frames % 1000 == 0) {
+                    printf("[DEBUG] 帧号未变化，已跳过 %d 次，当前帧号: %d\n", 
+                           skipped_frames, current_vdma_frame);
+                }
+                
+                usleep(1000);
+                continue;
+            }
+            /* 强制模式：继续发送，但使用当前帧号 */
         }
         last_vdma_frame = current_vdma_frame;
         
         /* 获取帧数据 */
         const uint8_t *rgba_frame = (uint8_t*)vdma.frame_buffer + (read_frame * FRAME_SIZE);
+        
+        /* 调试：第一帧时打印帧数据信息 */
+        if (debug_mode && frame_count == 0) {
+            printf("[DEBUG] 发送第一帧，读取帧缓冲 #%d\n", read_frame);
+            printf("[DEBUG] 帧数据前16字节: ");
+            for (int i = 0; i < 16; i++) {
+                printf("%02X ", rgba_frame[i]);
+            }
+            printf("\n");
+        }
         
         /* 发送帧 */
         int ret;
@@ -334,23 +377,32 @@ int main_loop()
         
         frame_count++;
         
-        /* 每60帧打印统计 */
-        if (frame_count % 60 == 0) {
-            clock_gettime(CLOCK_MONOTONIC, &current_time);
+        /* 每秒打印统计（或每60帧） */
+        clock_gettime(CLOCK_MONOTONIC, &current_time);
+        double since_last = (current_time.tv_sec - last_status_time.tv_sec) + 
+                           (current_time.tv_nsec - last_status_time.tv_nsec) / 1e9;
+        
+        if (since_last >= 1.0 || frame_count % 60 == 0) {
             double elapsed = (current_time.tv_sec - start_time.tv_sec) + 
                            (current_time.tv_nsec - start_time.tv_nsec) / 1e9;
             double fps = frame_count / elapsed;
             double bitrate = (double)FRAME_SIZE * frame_count * 8 / elapsed / 1e6;
             
-            printf("已发送 %d 帧 (FPS: %.1f, 码率: %.1f Mbps)\n", 
+            printf("已发送 %d 帧 (FPS: %.1f, 码率: %.1f Mbps", 
                    frame_count, fps, bitrate);
+            if (skipped_frames > 0) {
+                printf(", 跳过: %d", skipped_frames);
+            }
+            printf(")\n");
+            
+            last_status_time = current_time;
         }
         
         /* 控制帧率 */
         usleep(FRAME_INTERVAL_US);
     }
     
-    printf("\n总共发送 %d 帧\n", frame_count);
+    printf("\n总共发送 %d 帧，跳过 %d 次\n", frame_count, skipped_frames);
     return 0;
 }
 
@@ -363,12 +415,18 @@ void print_usage(const char *prog)
     printf("  -H, --host <IP>      目标IP地址 (默认: %s)\n", DEFAULT_HOST);
     printf("  -p, --port <端口>    目标端口 (默认: %d)\n", DEFAULT_PORT);
     printf("  -t, --tcp            使用TCP协议 (默认: UDP)\n");
+    printf("  -d, --debug          调试模式，打印更多信息\n");
+    printf("  -f, --force          强制发送模式，忽略帧变化检测\n");
     printf("  -h, --help           显示帮助信息\n");
     printf("\n示例:\n");
     printf("  %s -H 10.72.43.219 -p 5000        # UDP模式\n", prog);
     printf("  %s -H 10.72.43.219 -p 5000 -t     # TCP模式\n", prog);
+    printf("  %s -H 10.72.43.219 -d -f          # 调试+强制发送模式\n", prog);
     printf("\n数据格式:\n");
     printf("  每帧数据 = 帧头(32字节) + RGBA像素数据(%d字节)\n", FRAME_SIZE);
+    printf("\n调试选项说明:\n");
+    printf("  -d 调试模式: 打印VDMA状态、帧缓冲内容等调试信息\n");
+    printf("  -f 强制发送: 即使VDMA帧号不变化也持续发送，用于测试网络\n");
 }
 
 /* ==================== 主函数 ==================== */
@@ -379,15 +437,17 @@ int main(int argc, char **argv)
     
     /* 解析命令行参数 */
     static struct option long_options[] = {
-        {"host", required_argument, 0, 'H'},
-        {"port", required_argument, 0, 'p'},
-        {"tcp",  no_argument,       0, 't'},
-        {"help", no_argument,       0, 'h'},
+        {"host",  required_argument, 0, 'H'},
+        {"port",  required_argument, 0, 'p'},
+        {"tcp",   no_argument,       0, 't'},
+        {"debug", no_argument,       0, 'd'},
+        {"force", no_argument,       0, 'f'},
+        {"help",  no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
     
     int opt;
-    while ((opt = getopt_long(argc, argv, "H:p:th", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "H:p:tdfh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'H':
                 strncpy(target_host, optarg, sizeof(target_host) - 1);
@@ -397,6 +457,12 @@ int main(int argc, char **argv)
                 break;
             case 't':
                 use_tcp = 1;
+                break;
+            case 'd':
+                debug_mode = 1;
+                break;
+            case 'f':
+                force_send = 1;
                 break;
             case 'h':
             case '?':
