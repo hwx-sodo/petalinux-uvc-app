@@ -14,8 +14,8 @@
  *   ./network-stream-app -H <PC_IP地址> [-p 端口] [-t]
  * 
  * 示例：
- *   ./network-stream-app -H 10.72.43.219 -p 5000        # UDP模式
- *   ./network-stream-app -H 10.72.43.219 -p 5000 -t     # TCP模式
+ *   ./network-stream-app -H 10.72.43.200 -p 5000        # UDP模式
+ *   ./network-stream-app -H 10.72.43.200 -p 5000 -t     # TCP模式
  */
 
 #include <stdio.h>
@@ -45,11 +45,11 @@
 #define FRAME_SIZE      (VIDEO_WIDTH * VIDEO_HEIGHT * BYTES_PER_PIXEL)
 
 /* 帧缓冲物理地址 */
-#define FRAME_BUFFER_PHYS   0x70000000  /* 与设备树reserved_memory一致 */
+#define FRAME_BUFFER_PHYS   0x20000000  /* 与设备树reserved_memory一致 (0x20000000-0x40000000) */
 
 /* 默认网络参数 */
 #define DEFAULT_PORT        5000
-#define DEFAULT_HOST        "10.72.43.219"    /* PC的IP地址 */
+#define DEFAULT_HOST        "10.72.43.200"    /* PC的IP地址 */
 #define DEFAULT_PROTOCOL    "udp"
 
 /* 目标帧率 */
@@ -419,9 +419,9 @@ void print_usage(const char *prog)
     printf("  -f, --force          强制发送模式，忽略帧变化检测\n");
     printf("  -h, --help           显示帮助信息\n");
     printf("\n示例:\n");
-    printf("  %s -H 10.72.43.219 -p 5000        # UDP模式\n", prog);
-    printf("  %s -H 10.72.43.219 -p 5000 -t     # TCP模式\n", prog);
-    printf("  %s -H 10.72.43.219 -d -f          # 调试+强制发送模式\n", prog);
+    printf("  %s -H 10.72.43.200 -p 5000        # UDP模式\n", prog);
+    printf("  %s -H 10.72.43.200 -p 5000 -t     # TCP模式\n", prog);
+    printf("  %s -H 10.72.43.200 -d -f          # 调试+强制发送模式\n", prog);
     printf("\n数据格式:\n");
     printf("  每帧数据 = 帧头(32字节) + RGBA像素数据(%d字节)\n", FRAME_SIZE);
     printf("\n调试选项说明:\n");

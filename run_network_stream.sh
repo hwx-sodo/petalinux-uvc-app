@@ -6,9 +6,9 @@
 #   ./run_network_stream.sh <PC的IP地址> [端口] [协议]
 #
 # 示例:
-#   ./run_network_stream.sh 10.72.43.219           # UDP模式，默认端口5000
-#   ./run_network_stream.sh 10.72.43.219 8000      # UDP模式，端口8000
-#   ./run_network_stream.sh 10.72.43.219 5000 tcp  # TCP模式
+#   ./run_network_stream.sh 10.72.43.200           # UDP模式，默认端口5000
+#   ./run_network_stream.sh 10.72.43.200 8000      # UDP模式，端口8000
+#   ./run_network_stream.sh 10.72.43.200 5000 tcp  # TCP模式
 #
 
 set -e
@@ -22,7 +22,7 @@ NC='\033[0m' # No Color
 # 默认参数
 DEFAULT_PORT=5000
 DEFAULT_PROTOCOL="udp"
-DEFAULT_PC_IP="10.72.43.219"    # PC的IP地址
+DEFAULT_PC_IP="10.72.43.200"    # PC的IP地址
 BOARD_IP="10.72.43.10"          # 开发板的IP地址
 NETMASK="255.255.0.0"           # 子网掩码
 APP_PATH="/usr/bin/eth-camera-app"  # 应用程序路径
@@ -45,12 +45,12 @@ if [ $# -lt 1 ]; then
     echo "  force     强制发送模式，忽略帧变化检测"
     echo ""
     echo "示例:"
-    echo "  $0 10.72.43.219"
-    echo "  $0 10.72.43.219 8000"
-    echo "  $0 10.72.43.219 5000 tcp"
-    echo "  $0 10.72.43.219 5000 udp debug       # 调试模式"
-    echo "  $0 10.72.43.219 5000 udp force       # 强制发送模式"
-    echo "  $0 10.72.43.219 5000 udp debug force # 调试+强制"
+    echo "  $0 10.72.43.200"
+    echo "  $0 10.72.43.200 8000"
+    echo "  $0 10.72.43.200 5000 tcp"
+    echo "  $0 10.72.43.200 5000 udp debug       # 调试模式"
+    echo "  $0 10.72.43.200 5000 udp force       # 强制发送模式"
+    echo "  $0 10.72.43.200 5000 udp debug force # 调试+强制"
     echo ""
     echo "PC端接收命令:"
     echo "  python receive_stream.py -p 5000        # UDP模式"

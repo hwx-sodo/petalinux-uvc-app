@@ -62,7 +62,7 @@ typedef struct {
  * @param height 视频高度（像素）
  * @param bytes_per_pixel 每像素字节数（如RGB888为3，RGBA为4）
  * @param num_frames 帧缓冲数量（建议3个，用于三缓冲）
- * @param frame_buffer_phys 帧缓冲物理地址（必须与设备树reserved-memory一致）
+ * @param frame_buffer_phys 帧缓冲物理地址（0x20000000，与设备树reserved-memory一致）
  * @return 0成功，-1失败
  */
 int vdma_init(vdma_control_t *vdma, int width, int height, 

@@ -174,7 +174,7 @@ python -c "import cv2; import numpy; print('安装成功！OpenCV版本:', cv2._
 ```cmd
 ipconfig
 ```
-找到"以太网适配器"下的"IPv4 地址"，例如：`10.72.43.219`
+找到"以太网适配器"下的"IPv4 地址"，例如：`10.72.43.200`
 
 **Linux/Mac:**
 ```bash
@@ -199,7 +199,7 @@ ifconfig eth0 10.72.43.10 netmask 255.255.0.0 up
 
 **在开发板上ping PC：**
 ```bash
-ping 10.72.43.219 -c 3
+ping 10.72.43.200 -c 3
 ```
 
 **在PC上ping开发板：**
@@ -297,10 +297,10 @@ python receive_stream.py -p 5000 -o output.avi
 
 ```bash
 # 使用启动脚本（推荐）
-sudo ./run_network_stream.sh 10.72.43.219
+sudo ./run_network_stream.sh 10.72.43.200
 
 # 或直接运行程序
-sudo ./network-stream-app -H 10.72.43.219 -p 5000
+sudo ./network-stream-app -H 10.72.43.200 -p 5000
 ```
 
 **看到以下输出表示成功：**
@@ -316,11 +316,11 @@ IR Camera over Ethernet
 [3/5] 启动VDMA...
 [4/5] 启动VPSS...
 [5/5] 初始化网络连接...
-创建UDP套接字，目标: 10.72.43.219:5000
+创建UDP套接字，目标: 10.72.43.200:5000
 
 开始网络视频流传输...
 分辨率: 640x480@60fps (RGBA格式)
-协议: UDP, 目标: 10.72.43.219:5000
+协议: UDP, 目标: 10.72.43.200:5000
 已发送 60 帧 (FPS: 60.1, 码率: 590.2 Mbps)
 已发送 120 帧 (FPS: 60.0, 码率: 589.8 Mbps)
 ...
@@ -350,7 +350,7 @@ IR Camera over Ethernet
 
 | 参数 | 说明 | 示例 |
 |------|------|------|
-| `-H, --host` | PC的IP地址 | `-H 10.72.43.219` |
+| `-H, --host` | PC的IP地址 | `-H 10.72.43.200` |
 | `-p, --port` | 端口号 | `-p 5000` |
 | `-t, --tcp` | 使用TCP模式 | `-t` |
 
@@ -419,7 +419,7 @@ sudo sysctl -w net.core.rmem_default=8388608
 python receive_stream.py -p 5000 -t
 
 # 开发板端
-sudo ./run_network_stream.sh 10.72.43.219 5000 tcp
+sudo ./run_network_stream.sh 10.72.43.200 5000 tcp
 ```
 
 ---
@@ -477,7 +477,7 @@ cat /proc/device-tree/axi/vpss*/compatible
 │  $ python receive_stream.py -p 5000                            │
 │                                                                │
 │  【开发板 - 后启动】                                            │
-│  $ sudo ./run_network_stream.sh 10.72.43.219                   │
+│  $ sudo ./run_network_stream.sh 10.72.43.200                   │
 │                                                                │
 │  【退出】按 'q' 键                                              │
 │                                                                │

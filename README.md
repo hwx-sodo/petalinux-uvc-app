@@ -42,7 +42,7 @@ python receive_stream.py -p 5000
 ifconfig eth0 10.72.43.10 netmask 255.255.0.0 up
 
 # 启动发送
-sudo ./run_network_stream.sh 10.72.43.219
+sudo ./run_network_stream.sh 10.72.43.200
 ```
 
 **第3步：查看视频**
@@ -54,20 +54,20 @@ sudo ./run_network_stream.sh 10.72.43.219
 ```bash
 # TCP模式（可靠传输，两端都加-t）
 python receive_stream.py -p 5000 -t                    # PC端
-sudo ./run_network_stream.sh 10.72.43.219 5000 tcp     # 开发板
+sudo ./run_network_stream.sh 10.72.43.200 5000 tcp     # 开发板
 
 # 保存视频到文件
 python receive_stream.py -p 5000 -o output.avi
 
 # 调试模式（查看详细信息）
 python receive_stream.py -p 5000 -d                    # PC端
-sudo ./run_network_stream.sh 10.72.43.219 5000 udp debug  # 开发板
+sudo ./run_network_stream.sh 10.72.43.200 5000 udp debug  # 开发板
 
 # 强制发送模式（忽略帧变化检测，用于测试网络）
-sudo ./run_network_stream.sh 10.72.43.219 5000 udp force  # 开发板
+sudo ./run_network_stream.sh 10.72.43.200 5000 udp force  # 开发板
 
 # 调试+强制模式
-sudo ./run_network_stream.sh 10.72.43.219 5000 udp debug force
+sudo ./run_network_stream.sh 10.72.43.200 5000 udp debug force
 ```
 
 ## 编译说明
@@ -116,6 +116,15 @@ make help      # 显示帮助信息
 | 帧率 | 60 fps |
 | 帧大小 | 1,228,800 bytes |
 | 带宽需求 | ~70 MB/s (~560 Mbps) |
+
+### 硬件地址
+
+| 参数 | 值 |
+|------|-----|
+| 帧缓冲区物理地址 | 0x20000000 - 0x40000000 |
+| 帧缓冲区大小 | 0x20000000 (512 MB) |
+| VPSS基地址 | 0x80000000 |
+| VDMA基地址 | 0x80020000 |
 
 ### 网络传输参数
 
