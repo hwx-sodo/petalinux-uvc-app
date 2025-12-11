@@ -2,13 +2,17 @@
 # 支持 PetaLinux/Yocto 环境和本地编译
 # 
 # 使用方法：
-#   make           - 编译eth-camera-app
-#   make all       - 编译eth-camera-app
+#   make           - 编译 eth-camera-app
+#   make all       - 编译 eth-camera-app
 #   make clean     - 清理编译产物
 #   make install   - 安装到目标系统
 #
 # 目标程序：
-#   eth-camera-app - 以太网视频流传输
+#   eth-camera-app - 以太网视频流传输（含诊断功能）
+#
+# 诊断功能使用：
+#   ./eth-camera-app -D              # 诊断模式
+#   ./eth-camera-app -D -s frame.bin # 诊断并保存帧数据
 
 # 编译器设置（如果环境变量未定义，使用默认值）
 CC ?= gcc
@@ -36,9 +40,6 @@ $(TARGET): $(OBJS)
 	@echo "========================================="
 
 # 编译源文件
-# CFLAGS由Recipe通过环境变量传递，包含：
-# - 系统头文件路径（-I/usr/include等）
-# - 编译选项（-Wall -O2 -std=c99等）
 %.o: %.c $(DEPS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -64,5 +65,10 @@ help:
 	@echo "编译示例:"
 	@echo "  make                    # 使用默认编译器"
 	@echo "  make CC=aarch64-linux-gnu-gcc  # 使用交叉编译器"
+	@echo ""
+	@echo "诊断功能使用:"
+	@echo "  ./$(TARGET) -D              # 仅诊断模式"
+	@echo "  ./$(TARGET) -D -s frame.bin # 诊断并保存帧数据"
+	@echo "  ./$(TARGET) -d -f           # 调试+强制发送"
 
 .PHONY: all clean install help

@@ -77,10 +77,12 @@ class FrameHeader:
 class VideoReceiver:
     """视频流接收器"""
     
-    def __init__(self, port, use_tcp=False, output_file=None):
+    def __init__(self, port, use_tcp=False, output_file=None, debug=False, color_mode='rgba'):
         self.port = port
         self.use_tcp = use_tcp
         self.output_file = output_file
+        self.debug = debug
+        self.color_mode = color_mode  # 颜色模式: rgba, bgra, rgb, gray
         
         self.running = False
         self.sock = None
@@ -92,6 +94,8 @@ class VideoReceiver:
         self.bytes_received = 0
         self.last_frame_num = -1
         self.dropped_frames = 0
+        self.invalid_headers = 0  # 无效帧头计数
+        self.partial_frames = 0   # 不完整帧计数
         
         # 帧队列（用于显示）
         self.frame_queue = queue.Queue(maxsize=5)
@@ -161,8 +165,40 @@ class VideoReceiver:
                     if HAS_OPENCV:
                         rgba = np.frombuffer(frame, dtype=np.uint8).reshape(
                             (VIDEO_HEIGHT, VIDEO_WIDTH, 4))
-                        # RGBA转BGR（OpenCV格式）
-                        bgr = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
+                        
+                        # 根据格式选择转换方式
+                        # 数据格式说明:
+                        #   rgba: 字节顺序 R,G,B,A
+                        #   bgra: 字节顺序 B,G,R,A
+                        #   argb: 字节顺序 A,R,G,B (IR相机格式 {FF,RR,GG,BB})
+                        #   rgb:  忽略第4字节，按R,G,B处理
+                        #   gray: 只取第一个通道作为灰度
+                        if self.color_mode == 'rgba':
+                            bgr = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
+                        elif self.color_mode == 'bgra':
+                            bgr = cv2.cvtColor(rgba, cv2.COLOR_BGRA2BGR)
+                        elif self.color_mode == 'argb':
+                            # ARGB格式: {A,R,G,B} -> 需要重排为 {R,G,B,A} 再转BGR
+                            # 字节0=A, 字节1=R, 字节2=G, 字节3=B
+                            argb = rgba  # 实际是ARGB数据
+                            # 重排通道: A,R,G,B -> B,G,R (忽略A)
+                            bgr = np.zeros((VIDEO_HEIGHT, VIDEO_WIDTH, 3), dtype=np.uint8)
+                            bgr[:,:,0] = argb[:,:,3]  # B
+                            bgr[:,:,1] = argb[:,:,2]  # G
+                            bgr[:,:,2] = argb[:,:,1]  # R
+                        elif self.color_mode == 'rgb':
+                            # 忽略Alpha通道，直接RGB->BGR
+                            bgr = cv2.cvtColor(rgba[:,:,:3], cv2.COLOR_RGB2BGR)
+                        elif self.color_mode == 'gray':
+                            # 只取第一个通道作为灰度图
+                            gray = rgba[:,:,0]
+                            bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+                        elif self.color_mode == 'gray2':
+                            # 取第二个通道作为灰度图 (如果是ARGB，这是R通道)
+                            gray = rgba[:,:,1]
+                            bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+                        else:
+                            bgr = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
                         
                         try:
                             self.frame_queue.put_nowait(bgr)
@@ -182,32 +218,53 @@ class VideoReceiver:
     
     def _receive_frame_udp(self):
         """接收UDP帧"""
-        # 接收帧头
-        data, addr = self.sock.recvfrom(FRAME_HEADER_SIZE)
+        # 接收第一个数据包（应该是帧头）
+        # UDP recvfrom会接收整个数据包，不管请求多少字节
+        data, addr = self.sock.recvfrom(65535)
+        self.bytes_received += len(data)
+        
         if len(data) < FRAME_HEADER_SIZE:
+            if self.debug:
+                print(f"[DEBUG] 收到数据包太小: {len(data)} bytes")
             return None
         
-        header = FrameHeader(data)
+        # 尝试解析帧头
+        header = FrameHeader(data[:FRAME_HEADER_SIZE])
         if not header.is_valid():
+            self.invalid_headers += 1
+            if self.debug and self.invalid_headers <= 10:
+                # 只打印前10次无效帧头
+                print(f"[DEBUG] 无效帧头 #{self.invalid_headers}, magic=0x{header.magic:08X} (期望0x{FRAME_MAGIC:08X})")
+                print(f"[DEBUG] 数据包前32字节: {data[:32].hex()}")
             return None
+        
+        if self.debug and self.frame_count == 0:
+            print(f"[DEBUG] 收到第一个有效帧头: 帧号={header.frame_num}, 大小={header.frame_size}")
         
         # 检测丢帧
         if self.last_frame_num >= 0:
             expected = self.last_frame_num + 1
             if header.frame_num != expected:
-                self.dropped_frames += header.frame_num - expected
+                dropped = header.frame_num - expected
+                if dropped > 0:
+                    self.dropped_frames += dropped
         self.last_frame_num = header.frame_num
         
-        # 接收帧数据
+        # 如果帧头和部分数据在同一个包中
         frame_data = bytearray()
+        if len(data) > FRAME_HEADER_SIZE:
+            frame_data.extend(data[FRAME_HEADER_SIZE:])
+        
+        # 接收剩余帧数据
         while len(frame_data) < header.frame_size:
-            remaining = header.frame_size - len(frame_data)
-            chunk_size = min(remaining, UDP_CHUNK_SIZE)
             try:
-                chunk, _ = self.sock.recvfrom(chunk_size + 100)
+                chunk, _ = self.sock.recvfrom(65535)
                 frame_data.extend(chunk)
                 self.bytes_received += len(chunk)
             except socket.timeout:
+                self.partial_frames += 1
+                if self.debug:
+                    print(f"[DEBUG] 帧 #{header.frame_num} 不完整: 收到 {len(frame_data)}/{header.frame_size} bytes")
                 return None  # 帧不完整
         
         return bytes(frame_data[:header.frame_size])
@@ -307,8 +364,14 @@ class VideoReceiver:
         fps = self.frame_count / elapsed if elapsed > 0 else 0
         bitrate = self.bytes_received * 8 / elapsed / 1e6 if elapsed > 0 else 0
         
-        print(f"帧: {self.frame_count:6d} | FPS: {fps:5.1f} | "
-              f"码率: {bitrate:6.1f} Mbps | 丢帧: {self.dropped_frames}")
+        stats = f"帧: {self.frame_count:6d} | FPS: {fps:5.1f} | 码率: {bitrate:6.1f} Mbps"
+        if self.dropped_frames > 0:
+            stats += f" | 丢帧: {self.dropped_frames}"
+        if self.invalid_headers > 0:
+            stats += f" | 无效头: {self.invalid_headers}"
+        if self.partial_frames > 0:
+            stats += f" | 不完整: {self.partial_frames}"
+        print(stats)
     
     def _cleanup(self):
         """清理资源"""
@@ -332,9 +395,17 @@ class VideoReceiver:
             print(f"\n统计:")
             print(f"  总帧数: {self.frame_count}")
             print(f"  运行时间: {elapsed:.1f} 秒")
-            print(f"  平均FPS: {self.frame_count/elapsed:.1f}")
+            print(f"  平均FPS: {self.frame_count/elapsed:.1f}" if elapsed > 0 else "  平均FPS: 0")
             print(f"  接收数据: {self.bytes_received/1024/1024:.1f} MB")
             print(f"  丢帧: {self.dropped_frames}")
+            print(f"  无效帧头: {self.invalid_headers}")
+            print(f"  不完整帧: {self.partial_frames}")
+            
+            if self.frame_count == 0 and self.bytes_received > 0:
+                print("\n[诊断] 收到数据但无有效帧，可能原因:")
+                print("  1. 发送端与接收端协议不匹配")
+                print("  2. 发送端没有正确发送帧头")
+                print("  3. 使用 -d 参数启动可查看详细调试信息")
 
 
 def main():
@@ -346,6 +417,7 @@ def main():
   %(prog)s -p 5000           # UDP模式监听5000端口
   %(prog)s -p 5000 -t        # TCP模式
   %(prog)s -p 5000 -o out.avi  # 保存视频
+  %(prog)s -p 5000 -d        # 调试模式
         ''')
     
     parser.add_argument('-p', '--port', type=int, default=5000,
@@ -354,6 +426,11 @@ def main():
                         help='使用TCP协议 (默认: UDP)')
     parser.add_argument('-o', '--output', type=str, default=None,
                         help='输出视频文件 (如: output.avi)')
+    parser.add_argument('-d', '--debug', action='store_true',
+                        help='调试模式，打印详细信息')
+    parser.add_argument('-c', '--color', type=str, default='rgba',
+                        choices=['rgba', 'bgra', 'argb', 'rgb', 'gray', 'gray2'],
+                        help='颜色模式: rgba(默认), bgra, argb({FF,RR,GG,BB}), rgb, gray, gray2')
     
     args = parser.parse_args()
     
@@ -363,10 +440,12 @@ def main():
     print(f"协议: {'TCP' if args.tcp else 'UDP'}")
     print(f"端口: {args.port}")
     print(f"输出: {args.output if args.output else '无'}")
+    print(f"调试: {'开启' if args.debug else '关闭'}")
+    print(f"颜色: {args.color}")
     print(f"OpenCV: {'已安装' if HAS_OPENCV else '未安装'}")
     print("=" * 50 + "\n")
     
-    receiver = VideoReceiver(args.port, args.tcp, args.output)
+    receiver = VideoReceiver(args.port, args.tcp, args.output, args.debug, args.color)
     
     # 如果需要保存视频
     if args.output and HAS_OPENCV:

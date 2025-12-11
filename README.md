@@ -42,7 +42,7 @@ python receive_stream.py -p 5000
 ifconfig eth0 10.72.43.10 netmask 255.255.0.0 up
 
 # 启动发送
-sudo ./run_network_stream.sh 10.72.43.219
+sudo ./run_network_stream.sh 10.72.43.200
 ```
 
 **第3步：查看视频**
@@ -54,10 +54,20 @@ sudo ./run_network_stream.sh 10.72.43.219
 ```bash
 # TCP模式（可靠传输，两端都加-t）
 python receive_stream.py -p 5000 -t                    # PC端
-sudo ./run_network_stream.sh 10.72.43.219 5000 tcp     # 开发板
+sudo ./run_network_stream.sh 10.72.43.200 5000 tcp     # 开发板
 
 # 保存视频到文件
 python receive_stream.py -p 5000 -o output.avi
+
+# 调试模式（查看详细信息）
+python receive_stream.py -p 5000 -d                    # PC端
+sudo ./run_network_stream.sh 10.72.43.200 5000 udp debug  # 开发板
+
+# 强制发送模式（忽略帧变化检测，用于测试网络）
+sudo ./run_network_stream.sh 10.72.43.200 5000 udp force  # 开发板
+
+# 调试+强制模式
+sudo ./run_network_stream.sh 10.72.43.200 5000 udp debug force
 ```
 
 ## 编译说明
@@ -107,6 +117,15 @@ make help      # 显示帮助信息
 | 帧大小 | 1,228,800 bytes |
 | 带宽需求 | ~70 MB/s (~560 Mbps) |
 
+### 硬件地址
+
+| 参数 | 值 |
+|------|-----|
+| 帧缓冲区物理地址 | 0x20000000 - 0x40000000 |
+| 帧缓冲区大小 | 0x20000000 (512 MB) |
+| VPSS基地址 | 0x80000000 |
+| VDMA基地址 | 0x80020000 |
+
 ### 网络传输参数
 
 | 参数 | UDP模式 | TCP模式 |
@@ -125,7 +144,36 @@ make help      # 显示帮助信息
 
 ## 常见问题
 
-### 1. 接收端收不到数据
+### 1. 接收端收到数据但帧数为0
+
+**症状:**
+- 接收端显示收到了数据（如1.1MB），但帧数始终为0
+- 开发板端没有显示"已发送 X 帧"的统计
+
+**原因分析:**
+这通常是因为VDMA的帧号没有变化。代码中有帧变化检测逻辑，如果VDMA帧号不变，会跳过发送。
+
+**解决方法:**
+```bash
+# 方法1: 使用调试模式查看详细信息
+./run_network_stream.sh 10.72.43.200 5000 udp debug
+
+# 方法2: 使用强制发送模式（忽略帧变化检测）
+./run_network_stream.sh 10.72.43.200 5000 udp force
+
+# 方法3: 同时使用调试和强制模式
+./run_network_stream.sh 10.72.43.200 5000 udp debug force
+
+# PC端使用调试模式
+python receive_stream.py -p 5000 -d
+```
+
+**调试输出说明:**
+- `[DEBUG] 帧号未变化，已跳过 X 次` - VDMA没有产生新帧
+- `[DEBUG] 无效帧头` - 收到的数据不是有效帧格式
+- `[DEBUG] 帧缓冲前16字节` - 显示实际帧数据内容
+
+### 2. 接收端收不到数据
 
 **排查步骤:**
 ```bash
@@ -141,7 +189,29 @@ sudo ufw allow 5000/udp
 sudo ufw allow 5000/tcp
 ```
 
-### 2. 视频卡顿或延迟高
+### 3. VPSS或VDMA错误
+
+**症状:**
+```
+警告: VPSS错误寄存器: 0x00000003
+VDMA状态: 0x00010000
+```
+
+**可能原因:**
+- 视频输入源未连接或未启动
+- 时钟配置问题
+- 设备树配置错误
+
+**排查步骤:**
+```bash
+# 检查UIO设备
+ls -la /dev/uio*
+
+# 检查VPSS和VDMA物理地址
+cat /sys/class/uio/uio*/maps/map0/addr
+```
+
+### 4. 视频卡顿或延迟高
 
 **可能原因:**
 - 网络带宽不足
@@ -153,7 +223,7 @@ sudo ufw allow 5000/tcp
 - 关闭其他占用网络的程序
 - 降低视频分辨率或帧率
 
-### 3. UDP模式丢帧严重
+### 5. UDP模式丢帧严重
 
 **解决方法:**
 ```bash
@@ -165,7 +235,7 @@ sudo sysctl -w net.core.rmem_default=8388608
 python receive_stream.py -p 5000 -t
 ```
 
-### 4. 编译错误
+### 6. 编译错误
 
 ```bash
 # 确保安装了必要的开发工具

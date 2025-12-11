@@ -6,9 +6,9 @@
 #   ./run_network_stream.sh <PC的IP地址> [端口] [协议]
 #
 # 示例:
-#   ./run_network_stream.sh 10.72.43.219           # UDP模式，默认端口5000
-#   ./run_network_stream.sh 10.72.43.219 8000      # UDP模式，端口8000
-#   ./run_network_stream.sh 10.72.43.219 5000 tcp  # TCP模式
+#   ./run_network_stream.sh 10.72.43.200           # UDP模式，默认端口5000
+#   ./run_network_stream.sh 10.72.43.200 8000      # UDP模式，端口8000
+#   ./run_network_stream.sh 10.72.43.200 5000 tcp  # TCP模式
 #
 
 set -e
@@ -22,39 +22,75 @@ NC='\033[0m' # No Color
 # 默认参数
 DEFAULT_PORT=5000
 DEFAULT_PROTOCOL="udp"
-DEFAULT_PC_IP="10.72.43.219"    # PC的IP地址
+DEFAULT_PC_IP="10.72.43.200"    # PC的IP地址
 BOARD_IP="10.72.43.10"          # 开发板的IP地址
 NETMASK="255.255.0.0"           # 子网掩码
-APP_PATH="/usr/bin/network-stream-app"
+APP_PATH="/usr/bin/eth-camera-app"  # 应用程序路径
+DEBUG_MODE=""
+FORCE_MODE=""
 
 # 检查参数
 if [ $# -lt 1 ]; then
     echo -e "${RED}错误: 请指定PC的IP地址${NC}"
     echo ""
-    echo "用法: $0 <PC_IP> [端口] [协议]"
+    echo "用法: $0 <PC_IP> [端口] [协议] [选项]"
     echo ""
     echo "参数:"
     echo "  PC_IP     PC端的IP地址（必需）"
     echo "  端口      网络端口（默认: ${DEFAULT_PORT}）"
     echo "  协议      udp 或 tcp（默认: ${DEFAULT_PROTOCOL}）"
     echo ""
-echo "示例:"
-echo "  $0 10.72.43.219"
-echo "  $0 10.72.43.219 8000"
-echo "  $0 10.72.43.219 5000 tcp"
-echo ""
-echo "PC端接收命令:"
-echo "  python receive_stream.py -p 5000        # UDP模式"
-echo "  python receive_stream.py -p 5000 -t     # TCP模式"
-echo ""
-echo "开发板IP配置:"
-echo "  ifconfig eth0 ${BOARD_IP} netmask ${NETMASK} up"
-exit 1
+    echo "选项（可在协议后添加）:"
+    echo "  debug     调试模式，打印详细信息"
+    echo "  force     强制发送模式，忽略帧变化检测"
+    echo "  diag      仅诊断模式，不进行网络传输"
+    echo "  save      诊断并保存帧数据到 frame.bin"
+    echo ""
+    echo "示例:"
+    echo "  $0 10.72.43.200"
+    echo "  $0 10.72.43.200 8000"
+    echo "  $0 10.72.43.200 5000 tcp"
+    echo "  $0 10.72.43.200 5000 udp debug       # 调试模式"
+    echo "  $0 10.72.43.200 5000 udp force       # 强制发送模式"
+    echo "  $0 10.72.43.200 5000 udp debug force # 调试+强制"
+    echo "  $0 10.72.43.200 5000 udp diag        # 仅诊断硬件状态"
+    echo "  $0 10.72.43.200 5000 udp save        # 诊断并保存帧数据"
+    echo ""
+    echo "PC端接收命令:"
+    echo "  python receive_stream.py -p 5000        # UDP模式"
+    echo "  python receive_stream.py -p 5000 -t     # TCP模式"
+    echo "  python receive_stream.py -p 5000 -d     # 调试模式"
+    echo ""
+    echo "开发板IP配置:"
+    echo "  ifconfig eth0 ${BOARD_IP} netmask ${NETMASK} up"
+    exit 1
 fi
 
 TARGET_IP=$1
 TARGET_PORT=${2:-$DEFAULT_PORT}
 PROTOCOL=${3:-$DEFAULT_PROTOCOL}
+
+# 解析额外选项 (第4个及以后的参数)
+DIAG_MODE=""
+SAVE_MODE=""
+shift 3 2>/dev/null || true
+for arg in "$@"; do
+    case "$arg" in
+        debug)
+            DEBUG_MODE="-d"
+            ;;
+        force)
+            FORCE_MODE="-f"
+            ;;
+        diag)
+            DIAG_MODE="-D"
+            ;;
+        save)
+            DIAG_MODE="-D"
+            SAVE_MODE="-s frame.bin"
+            ;;
+    esac
+done
 
 echo "========================================"
 echo "网络视频流传输"
@@ -82,6 +118,10 @@ fi
 echo "目标IP: $TARGET_IP"
 echo "端口:   $TARGET_PORT"
 echo "协议:   $PROTOCOL"
+[ -n "$DEBUG_MODE" ] && echo "调试:   开启"
+[ -n "$FORCE_MODE" ] && echo "强制:   开启"
+[ -n "$DIAG_MODE" ] && echo "诊断:   仅诊断模式（不传输）"
+[ -n "$SAVE_MODE" ] && echo "保存:   帧数据将保存到 frame.bin"
 echo ""
 
 # 配置开发板IP（如果没有配置）
@@ -107,18 +147,29 @@ else
 fi
 echo ""
 
-# 检查应用程序
+# 检查应用程序（支持多个可能的名称和路径）
 if [ ! -f "$APP_PATH" ]; then
-    # 尝试本地路径
-    if [ -f "./network-stream-app" ]; then
-        APP_PATH="./network-stream-app"
-    elif [ -f "/home/root/network-stream-app" ]; then
-        APP_PATH="/home/root/network-stream-app"
-    else
-        echo -e "${RED}错误: 找不到 network-stream-app${NC}"
+    # 尝试其他路径
+    for name in "eth-camera-app" "network-stream-app"; do
+        for dir in "/usr/bin" "." "/home/root" "/root"; do
+            if [ -f "$dir/$name" ]; then
+                APP_PATH="$dir/$name"
+                break 2
+            fi
+        done
+    done
+    
+    # 如果仍未找到
+    if [ ! -f "$APP_PATH" ]; then
+        echo -e "${RED}错误: 找不到应用程序${NC}"
+        echo "尝试过以下路径:"
+        echo "  /usr/bin/eth-camera-app"
+        echo "  /usr/bin/network-stream-app"
+        echo "  ./eth-camera-app"
+        echo ""
         echo "请先编译应用程序:"
         echo "  cd /path/to/petalinux_app"
-        echo "  make network-stream-app"
+        echo "  make"
         exit 1
     fi
 fi
@@ -146,6 +197,10 @@ CMD="$APP_PATH -H $TARGET_IP -p $TARGET_PORT"
 if [ "$PROTOCOL" = "tcp" ]; then
     CMD="$CMD -t"
 fi
+[ -n "$DEBUG_MODE" ] && CMD="$CMD $DEBUG_MODE"
+[ -n "$FORCE_MODE" ] && CMD="$CMD $FORCE_MODE"
+[ -n "$DIAG_MODE" ] && CMD="$CMD $DIAG_MODE"
+[ -n "$SAVE_MODE" ] && CMD="$CMD $SAVE_MODE"
 
 echo ""
 echo "启动命令: $CMD"

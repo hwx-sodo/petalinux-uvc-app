@@ -211,7 +211,7 @@ udhcpc -i eth0
 
 ```bash
 # Ping PC
-ping 10.72.43.219 -c 4
+ping 10.72.43.200 -c 4
 ```
 
 ---
@@ -229,7 +229,7 @@ python receive_stream.py -p 5000
 ### 8.2 在开发板上启动发送
 
 ```bash
-sudo ./run_network_stream.sh 10.72.43.219
+sudo ./run_network_stream.sh 10.72.43.200
 ```
 
 ---
@@ -342,7 +342,7 @@ petalinux-package --boot --fsbl images/linux/zynqmp_fsbl.elf \
 # 验证网络（开发板上）
 ifconfig -a
 ethtool eth0
-ping 10.72.43.219
+ping 10.72.43.200
 ```
 
 ---
