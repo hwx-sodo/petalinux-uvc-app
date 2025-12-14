@@ -25,12 +25,12 @@ LDFLAGS ?=
 # 目标程序名
 TARGET = eth-camera-app
 
-# 源文件
-SRCS = network_stream.c vpss_control.c vdma_control.c
+# 源文件（新链路：只需要 VDMA + 网络发送）
+SRCS = network_stream.c vdma_control.c
 OBJS = $(SRCS:.c=.o)
 
 # 头文件依赖
-DEPS = vpss_control.h vdma_control.h
+DEPS = vdma_control.h
 
 # 默认目标
 all: $(TARGET)

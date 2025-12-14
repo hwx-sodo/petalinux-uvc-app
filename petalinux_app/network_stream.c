@@ -20,7 +20,6 @@
  * 示例：
  *   ./eth-camera-app -H 10.72.43.200 -p 5000                 # UDP模式
  *   ./eth-camera-app -H 10.72.43.200 -p 5000 -t              # TCP模式
- *   ./eth-camera-app -H 10.72.43.200 --format yuyv           # 明确指定YUV422(YUYV)
  *   ./eth-camera-app -H 10.72.43.200 --width 640 --height 480 # 修改分辨率
  */
 
@@ -47,14 +46,12 @@
 #define DEFAULT_VIDEO_HEIGHT    480
 #define DEFAULT_NUM_FRAMES      3    /* 三缓冲 */
 
-/* 像素格式定义（与PC端receive_stream.py一致） */
-typedef enum {
-    PIXFMT_RGBA = 0,  /* 4 bytes/pixel */
-    PIXFMT_YUYV = 1,  /* YUV422 packed, 2 bytes/pixel (YUYV) */
-} pixel_format_t;
+/* 本项目只支持：YUV422 packed (YUYV), 2 bytes/pixel */
+#define PIXFMT_YUYV 1
+#define BYTES_PER_PIXEL 2
 
 /* 帧缓冲物理地址 */
-#define DEFAULT_FRAME_BUFFER_PHYS   0x70000000  /* 与 petalinux_config/system-user.dtsi 保持一致 */
+#define DEFAULT_FRAME_BUFFER_PHYS   0x20000000  /* 由你的系统内存规划决定 */
 
 /* 默认网络参数 */
 #define DEFAULT_PORT        5000
@@ -79,7 +76,7 @@ typedef struct __attribute__((packed)) {
     uint32_t frame_num;     /* 帧编号 */
     uint32_t width;         /* 图像宽度 */
     uint32_t height;        /* 图像高度 */
-    uint32_t format;        /* 像素格式: 0=RGBA, 1=YUYV(YUV422) */
+    uint32_t format;        /* 像素格式: 1=YUYV(YUV422) */
     uint32_t frame_size;    /* 帧数据大小 */
     uint32_t timestamp_sec; /* 时间戳（秒） */
     uint32_t timestamp_usec;/* 时间戳（微秒） */
@@ -106,26 +103,7 @@ static char save_file[256] = "";  /* 保存帧数据到文件 */
 static int video_width = DEFAULT_VIDEO_WIDTH;
 static int video_height = DEFAULT_VIDEO_HEIGHT;
 static int num_frames = DEFAULT_NUM_FRAMES;
-static pixel_format_t pixel_format = PIXFMT_YUYV;
 static uint32_t frame_buffer_phys = DEFAULT_FRAME_BUFFER_PHYS;
-
-static int bytes_per_pixel_from_format(pixel_format_t fmt)
-{
-    switch (fmt) {
-        case PIXFMT_RGBA: return 4;
-        case PIXFMT_YUYV: return 2;
-        default: return 2;
-    }
-}
-
-static const char* format_name(pixel_format_t fmt)
-{
-    switch (fmt) {
-        case PIXFMT_RGBA: return "RGBA";
-        case PIXFMT_YUYV: return "YUYV(YUV422)";
-        default: return "UNKNOWN";
-    }
-}
 
 /* ==================== 信号处理 ==================== */
 
@@ -232,8 +210,7 @@ int send_frame_header(int sock, uint32_t frame_num)
 {
     frame_header_t header;
     struct timespec ts;
-    const int bytes_per_pixel = bytes_per_pixel_from_format(pixel_format);
-    const uint32_t frame_size = (uint32_t)video_width * (uint32_t)video_height * (uint32_t)bytes_per_pixel;
+    const uint32_t frame_size = (uint32_t)video_width * (uint32_t)video_height * (uint32_t)BYTES_PER_PIXEL;
     
     clock_gettime(CLOCK_REALTIME, &ts);
     
@@ -241,7 +218,7 @@ int send_frame_header(int sock, uint32_t frame_num)
     header.frame_num = htonl(frame_num);
     header.width = htonl(video_width);
     header.height = htonl(video_height);
-    header.format = htonl((uint32_t)pixel_format);
+    header.format = htonl((uint32_t)PIXFMT_YUYV);
     header.frame_size = htonl(frame_size);
     header.timestamp_sec = htonl(ts.tv_sec);
     header.timestamp_usec = htonl(ts.tv_nsec / 1000);
@@ -591,13 +568,12 @@ int main_loop()
     int last_vdma_frame = -1;
     int skipped_frames = 0;  /* 跳过的帧数（帧号未变化） */
     struct timespec start_time, current_time, last_status_time;
-    const int bytes_per_pixel = bytes_per_pixel_from_format(pixel_format);
-    const int frame_size = video_width * video_height * bytes_per_pixel;
+    const int frame_size = video_width * video_height * BYTES_PER_PIXEL;
     clock_gettime(CLOCK_MONOTONIC, &start_time);
     last_status_time = start_time;
     
     printf("\n开始网络视频流传输...\n");
-    printf("分辨率: %dx%d@%dfps (%s)\n", video_width, video_height, TARGET_FPS, format_name(pixel_format));
+    printf("分辨率: %dx%d@%dfps (YUV422/YUYV)\n", video_width, video_height, TARGET_FPS);
     printf("协议: %s, 目标: %s:%d\n", use_tcp ? "TCP" : "UDP", target_host, target_port);
     printf("帧缓冲物理地址: 0x%08X\n", frame_buffer_phys);
     printf("帧大小: %d bytes (%.2f MB/s)\n", frame_size, 
@@ -743,7 +719,6 @@ void print_usage(const char *prog)
     printf("\n视频参数选项:\n");
     printf("      --width <像素>   图像宽度 (默认: %d)\n", DEFAULT_VIDEO_WIDTH);
     printf("      --height <像素>  图像高度 (默认: %d)\n", DEFAULT_VIDEO_HEIGHT);
-    printf("      --format <fmt>   像素格式: yuyv(默认), rgba\n");
     printf("      --fb-phys <hex>  帧缓冲物理地址 (默认: 0x%08X)\n", DEFAULT_FRAME_BUFFER_PHYS);
     printf("\n诊断选项:\n");
     printf("  -d, --debug          调试模式，打印详细诊断信息\n");
@@ -756,7 +731,7 @@ void print_usage(const char *prog)
     printf("  %s -D                             # 仅诊断硬件\n", prog);
     printf("  %s -D -s frame.bin                # 诊断并保存帧数据\n", prog);
     printf("\n诊断选项说明:\n");
-    printf("  -d  打印VPSS/VDMA寄存器状态和帧缓冲内容\n");
+    printf("  -d  打印VDMA寄存器状态和帧缓冲内容\n");
     printf("  -D  只运行诊断，不进行网络传输\n");
     printf("  -s  保存帧缓冲#0到二进制文件，可用hexdump或PC端分析\n");
 }
@@ -778,8 +753,7 @@ int main(int argc, char **argv)
         {"save",  required_argument, 0, 's'},
         {"width", required_argument, 0,  1 },
         {"height",required_argument, 0,  2 },
-        {"format",required_argument, 0,  3 },
-        {"fb-phys",required_argument,0,  4 },
+        {"fb-phys",required_argument,0,  3 },
         {"help",  no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
@@ -818,16 +792,6 @@ int main(int argc, char **argv)
                 video_height = atoi(optarg);
                 break;
             case 3:
-                if (strcmp(optarg, "yuyv") == 0 || strcmp(optarg, "yuv422") == 0) {
-                    pixel_format = PIXFMT_YUYV;
-                } else if (strcmp(optarg, "rgba") == 0) {
-                    pixel_format = PIXFMT_RGBA;
-                } else {
-                    fprintf(stderr, "不支持的format: %s (可选: yuyv, rgba)\n", optarg);
-                    return 1;
-                }
-                break;
-            case 4:
                 frame_buffer_phys = (uint32_t)strtoul(optarg, NULL, 0);
                 break;
             case 'h':
@@ -856,7 +820,7 @@ int main(int argc, char **argv)
         goto cleanup;
     }
     num_frames = DEFAULT_NUM_FRAMES;
-    const int bytes_per_pixel = bytes_per_pixel_from_format(pixel_format);
+    const int bytes_per_pixel = BYTES_PER_PIXEL;
     if (vdma_init(&vdma, video_width, video_height, 
                   bytes_per_pixel, num_frames,
                   frame_buffer_phys) < 0) {

@@ -10,7 +10,6 @@
 ├── receive_stream.py       # PC端接收程序 (Python)
 └── petalinux_app/          # 用户空间应用程序源码
     ├── network_stream.c    # 网络传输应用主程序
-    ├── vpss_control.c/h    # VPSS控制模块
     ├── vdma_control.c/h    # VDMA控制模块
     └── Makefile            # 编译配置
 ```
@@ -121,9 +120,8 @@ make help      # 显示帮助信息
 
 | 参数 | 值 |
 |------|-----|
-| 帧缓冲区物理地址 | 0x70000000 - 0x80000000 |
-| 帧缓冲区大小 | 0x10000000 (256 MB) |
-| VPSS基地址 | 0x80000000（新链路默认不使用） |
+| 帧缓冲区物理地址 | 0x20000000 |
+| 帧缓冲区大小 | 由你的系统规划决定 |
 | VDMA基地址 | 0x80020000 |
 
 ### 网络传输参数
@@ -189,11 +187,10 @@ sudo ufw allow 5000/udp
 sudo ufw allow 5000/tcp
 ```
 
-### 3. VPSS或VDMA错误
+### 3. VDMA错误
 
 **症状:**
 ```
-警告: VPSS错误寄存器: 0x00000003
 VDMA状态: 0x00010000
 ```
 
@@ -207,7 +204,7 @@ VDMA状态: 0x00010000
 # 检查UIO设备
 ls -la /dev/uio*
 
-# 检查VPSS和VDMA物理地址
+# 检查VDMA物理地址（UIO映射）
 cat /sys/class/uio/uio*/maps/map0/addr
 ```
 
@@ -249,10 +246,9 @@ make
 
 ## 版本历史
 
-- **v5.0** (2025-12):
-  - 适配新的Vivado链路：CameraLink 16-bit → AXI4-Stream 32-bit → VDMA
-  - 默认视频格式改为 YUV422(YUYV)，PC端用OpenCV解码显示
-  - 帧缓冲默认物理地址改为 0x70000000（与设备树reserved-memory一致）
+- **v5.1** (2025-12):
+  - 项目收敛为单一格式：仅支持 YUV422(YUYV)
+  - 帧缓冲物理地址统一为 0x20000000（按你的系统内存规划）
 
 - **v4.0** (2024-12):
   - 移除USB UVC功能，专注以太网传输
@@ -268,6 +264,6 @@ make
   - 添加 hs 链接支持
   - 改进错误诊断
 
-- **v1.0**: 
-  - 初始 RGBA 格式支持
+- **v1.0**:
+  - 初始版本
   - USB UVC基础功能

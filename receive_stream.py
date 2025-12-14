@@ -4,7 +4,7 @@
 网络视频流接收程序（PC端）
 
 功能：
-- 接收来自ZynqMP开发板的视频流（默认YUV422/YUYV，兼容RGBA）
+- 接收来自ZynqMP开发板的YUV422(YUYV)视频流
 - 支持UDP和TCP两种协议
 - 实时显示视频画面
 - 可选保存为视频文件
@@ -51,7 +51,6 @@ FRAME_MAGIC = 0x56494446  # "VIDF"
 UDP_CHUNK_SIZE = 1400
 
 # 像素格式（与发送端 eth-camera-app 一致）
-PIXFMT_RGBA = 0
 PIXFMT_YUYV = 1  # YUV422 packed (YUYV)
 
 
@@ -81,9 +80,8 @@ class VideoReceiver:
         self.output_file = output_file
         self.debug = debug
         # 解码模式:
-        # - auto: 根据帧头header.format自动选择（本项目默认YUV422/YUYV）
-        # - yuyv/uyvy: 强制按对应YUV422字节序解码
-        # - rgba/bgra/argb/rgb/gray/gray2: 兼容旧RGBA链路
+        # - auto: 严格按帧头 header.format 判断（本项目只会发送YUV422/YUYV）
+        # - yuyv/uyvy: 如果你怀疑相机字节序不一致，可强制切换
         self.color_mode = color_mode
         self.yuv_order = yuv_order
         
@@ -289,6 +287,10 @@ class VideoReceiver:
         # auto：严格按帧头决定；只有用户显式指定yuyv/uyvy才强制覆盖
         is_yuv_forced = forced in ('yuyv', 'uyvy', 'yuv', 'yuv422')
         is_yuv = (header.format == PIXFMT_YUYV) if forced == 'auto' else is_yuv_forced
+        if not is_yuv:
+            # 本项目只支持YUV422：如果帧头不是YUV422，就直接拒绝（避免误解码）
+            raise ValueError(f"不支持的像素格式: header.format={header.format} (仅支持YUYV/YUV422)")
+
         if is_yuv:
             expected = w * h * 2
             if len(frame_bytes) < expected:
@@ -304,33 +306,6 @@ class VideoReceiver:
             if order == 'uyvy':
                 return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_UYVY)
             return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_YUY2)
-
-        # ---------- RGBA/ARGB等（兼容旧链路） ----------
-        expected = w * h * 4
-        if len(frame_bytes) < expected:
-            raise ValueError(f"帧数据不足(RGBA): got={len(frame_bytes)}, expected>={expected}")
-        rgba = np.frombuffer(frame_bytes[:expected], dtype=np.uint8).reshape((h, w, 4))
-
-        if forced == 'bgra':
-            return cv2.cvtColor(rgba, cv2.COLOR_BGRA2BGR)
-        if forced == 'argb':
-            argb = rgba
-            bgr = np.zeros((h, w, 3), dtype=np.uint8)
-            bgr[:, :, 0] = argb[:, :, 3]  # B
-            bgr[:, :, 1] = argb[:, :, 2]  # G
-            bgr[:, :, 2] = argb[:, :, 1]  # R
-            return bgr
-        if forced == 'rgb':
-            return cv2.cvtColor(rgba[:, :, :3], cv2.COLOR_RGB2BGR)
-        if forced == 'gray':
-            gray = rgba[:, :, 0]
-            return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-        if forced == 'gray2':
-            gray = rgba[:, :, 1]
-            return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-
-        # 默认按RGBA
-        return cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
     
     def _recv_exact(self, sock, size):
         """精确接收指定字节数"""
@@ -465,8 +440,8 @@ def main():
     parser.add_argument('-d', '--debug', action='store_true',
                         help='调试模式，打印详细信息')
     parser.add_argument('-c', '--color', type=str, default='auto',
-                        choices=['auto', 'yuyv', 'uyvy', 'rgba', 'bgra', 'argb', 'rgb', 'gray', 'gray2'],
-                        help='解码模式: auto(默认,按帧头自动/优先YUV422), yuyv, uyvy, rgba, bgra, argb({FF,RR,GG,BB}), rgb, gray, gray2')
+                        choices=['auto', 'yuyv', 'uyvy'],
+                        help='解码模式: auto(默认,按帧头自动), yuyv, uyvy')
     parser.add_argument('--yuv-order', type=str, default='yuyv',
                         choices=['yuyv', 'uyvy'],
                         help='当输入是YUV422时的字节序 (默认: yuyv)')

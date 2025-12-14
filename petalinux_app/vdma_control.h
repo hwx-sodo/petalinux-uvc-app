@@ -60,7 +60,7 @@ typedef struct {
  * @param vdma VDMA控制结构指针
  * @param width 视频宽度（像素）
  * @param height 视频高度（像素）
- * @param bytes_per_pixel 每像素字节数（如RGB888为3，RGBA为4）
+ * @param bytes_per_pixel 每像素字节数（本项目YUV422/YUYV为2）
  * @param num_frames 帧缓冲数量（建议3个，用于三缓冲）
  * @param frame_buffer_phys 帧缓冲物理地址（0x20000000，与设备树reserved-memory一致）
  * @return 0成功，-1失败

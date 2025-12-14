@@ -355,8 +355,7 @@ CameraLink YUV422 over Ethernet
 | `-t, --tcp` | 使用TCP模式 | `-t` |
 | `--width` | 图像宽度 | `--width 640` |
 | `--height` | 图像高度 | `--height 480` |
-| `--format` | 像素格式 | `--format yuyv` |
-| `--fb-phys` | 帧缓冲物理地址 | `--fb-phys 0x70000000` |
+| `--fb-phys` | 帧缓冲物理地址 | `--fb-phys 0x20000000` |
 
 ---
 
