@@ -7,11 +7,12 @@
  * 2. 从DDR读取视频帧（RGBA格式）
  * 3. 通过UDP/TCP网络发送到PC端
  * 
- * 数据流：
- * CameraLink(PL) → VPSS(YUV422→RGB) → VDMA → DDR(RGBA) → 网络 → PC
+ * 数据流（两种常见情况）：
+ * 1) 走VPSS颜色转换: CameraLink(PL) → VPSS(YUV422→RGB) → VDMA → DDR(RGBA) → 网络 → PC
+ * 2) 不走VPSS直写:   CameraLink(PL) → (AXIS宽度转换/打包) → VDMA → DDR(YUV422) → 网络 → PC
  * 
  * 使用方法：
- *   ./network-stream-app -H <PC_IP地址> [-p 端口] [-t]
+ *   ./network-stream-app -H <PC_IP地址> [-p 端口] [-t] [--format rgba|yuyv|uyvy] [--no-vpss]
  * 
  * 示例：
  *   ./network-stream-app -H 10.72.43.200 -p 5000        # UDP模式
@@ -21,6 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>  /* strcasecmp */
 #include <unistd.h>
 #include <signal.h>
 #include <fcntl.h>
@@ -40,9 +42,8 @@
 /* 视频参数 - 640x480@60fps */
 #define VIDEO_WIDTH     640
 #define VIDEO_HEIGHT    480
-#define BYTES_PER_PIXEL 4    /* RGBA格式：32位 */
+#define BYTES_PER_PIXEL 4    /* 默认: RGBA格式：32位 */
 #define NUM_FRAMES      3    /* 三缓冲 */
-#define FRAME_SIZE      (VIDEO_WIDTH * VIDEO_HEIGHT * BYTES_PER_PIXEL)
 
 /* 帧缓冲物理地址 */
 #define FRAME_BUFFER_PHYS   0x20000000  /* 与设备树reserved_memory一致 (0x20000000-0x40000000) */
@@ -70,7 +71,7 @@ typedef struct __attribute__((packed)) {
     uint32_t frame_num;     /* 帧编号 */
     uint32_t width;         /* 图像宽度 */
     uint32_t height;        /* 图像高度 */
-    uint32_t format;        /* 像素格式: 0=RGBA */
+    uint32_t format;        /* 像素格式: 0=RGBA, 1=YUYV(YUV422), 2=UYVY(YUV422) */
     uint32_t frame_size;    /* 帧数据大小 */
     uint32_t timestamp_sec; /* 时间戳（秒） */
     uint32_t timestamp_usec;/* 时间戳（微秒） */
@@ -93,6 +94,88 @@ static int debug_mode = 0;  /* 调试模式：打印更多信息 */
 static int force_send = 0;  /* 强制发送模式：忽略帧变化检测 */
 static int diag_only = 0;   /* 仅诊断模式：不进行网络传输 */
 static char save_file[256] = "";  /* 保存帧数据到文件 */
+static int no_vpss = 0;     /* 不初始化/启动VPSS（当硬件链路不经过VPSS时使用） */
+
+/* 当前视频参数（可通过参数覆盖） */
+static int video_width = VIDEO_WIDTH;
+static int video_height = VIDEO_HEIGHT;
+static int bytes_per_pixel = BYTES_PER_PIXEL;
+static size_t frame_size = 0;
+
+typedef enum {
+    PIXFMT_RGBA = 0,
+    PIXFMT_YUYV = 1,
+    PIXFMT_UYVY = 2,
+} pixel_format_t;
+
+static pixel_format_t pixel_format = PIXFMT_RGBA;
+
+static const char* pixel_format_to_string(pixel_format_t fmt)
+{
+    switch (fmt) {
+        case PIXFMT_RGBA: return "RGBA";
+        case PIXFMT_YUYV: return "YUYV (YUV422)";
+        case PIXFMT_UYVY: return "UYVY (YUV422)";
+        default: return "UNKNOWN";
+    }
+}
+
+static int pixel_format_to_bpp(pixel_format_t fmt)
+{
+    switch (fmt) {
+        case PIXFMT_RGBA: return 4;
+        case PIXFMT_YUYV: return 2;
+        case PIXFMT_UYVY: return 2;
+        default: return 4;
+    }
+}
+
+static pixel_format_t parse_pixel_format(const char *s)
+{
+    if (!s) return PIXFMT_RGBA;
+    if (strcasecmp(s, "rgba") == 0) return PIXFMT_RGBA;
+    if (strcasecmp(s, "yuyv") == 0) return PIXFMT_YUYV;
+    if (strcasecmp(s, "uyvy") == 0) return PIXFMT_UYVY;
+    return PIXFMT_RGBA;
+}
+
+static void hexdump_bytes(const uint8_t *p, size_t len)
+{
+    for (size_t i = 0; i < len; i++) {
+        printf("%02X ", p[i]);
+    }
+}
+
+/**
+ * 打印一段内存的前若干个字节，同时以16bit/32bit(小端)视角输出。
+ * 这样你可以直接对照硬件的“16位拼接”和“32位打包”是否发生了字节/半字交换。
+ */
+static void dump_first_words(const uint8_t *p, size_t len)
+{
+    size_t n = len < 32 ? len : 32;
+    printf("  原始前%zu字节: ", n);
+    hexdump_bytes(p, n);
+    printf("\n");
+
+    size_t w16 = (n / 2);
+    printf("  16bit(LE) 前%zu个: ", w16);
+    for (size_t i = 0; i < w16; i++) {
+        uint16_t v = (uint16_t)p[i * 2] | ((uint16_t)p[i * 2 + 1] << 8);
+        printf("%04X ", v);
+    }
+    printf("\n");
+
+    size_t w32 = (n / 4);
+    printf("  32bit(LE) 前%zu个: ", w32);
+    for (size_t i = 0; i < w32; i++) {
+        uint32_t v = (uint32_t)p[i * 4] |
+                     ((uint32_t)p[i * 4 + 1] << 8) |
+                     ((uint32_t)p[i * 4 + 2] << 16) |
+                     ((uint32_t)p[i * 4 + 3] << 24);
+        printf("%08X ", v);
+    }
+    printf("\n");
+}
 
 /* ==================== 信号处理 ==================== */
 
