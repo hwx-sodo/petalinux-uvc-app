@@ -149,18 +149,39 @@ int vdma_init(vdma_control_t *vdma, int width, int height,
     
     /* 等待复位完成 */
     int timeout = 1000;
-    while ((*(volatile uint32_t*)(vdma->base_addr + VDMA_S2MM_CONTROL) & VDMA_CTRL_RESET) && timeout--) {
+    while ((*(volatile uint32_t*)(vdma->base_addr + VDMA_S2MM_CONTROL) & VDMA_CTRL_RESET) && timeout > 0) {
         usleep(100);
+        timeout--;
     }
     
-    if (timeout == 0) {
+    if (timeout <= 0) {
         fprintf(stderr, "VDMA复位超时\n");
         return -1;
     }
     
     /* 配置VDMA参数 */
     printf("配置VDMA参数...\n");
-    uint32_t hsize = width * bytes_per_pixel;
+    uint32_t hsize = (uint32_t)width * (uint32_t)bytes_per_pixel;
+
+    /*
+     * 重要：
+     * 你的Vivado链路已经是 32-bit AXI4-Stream -> VDMA，
+     * 所以 HSize(每行字节数) 通常需要至少 4字节对齐（也就是32-bit对齐）。
+     *
+     * 对于YUV422(YUYV)：
+     * - bytes_per_pixel = 2
+     * - width必须是偶数（否则一行字节数=width*2无法被4整除）
+     */
+    if ((hsize % 4) != 0) {
+        fprintf(stderr,
+                "错误: 每行字节数(HSize=%u)不是4字节对齐。\n"
+                "  width=%d, bytes_per_pixel=%d\n"
+                "  你的VDMA输入是32-bit，建议让 width*bytes_per_pixel 能被4整除。\n"
+                "  如果是YUV422(YUYV,2Bpp)，请确保 width 为偶数。\n",
+                hsize, width, bytes_per_pixel);
+        return -1;
+    }
+
     uint32_t stride = hsize;
     
     *(volatile uint32_t*)(vdma->base_addr + VDMA_S2MM_HSIZE) = hsize;
@@ -247,17 +268,41 @@ int vdma_stop(vdma_control_t *vdma)
 
 /**
  * 获取当前VDMA正在写入的帧编号
+ * 
+ * 注意：根据Xilinx AXI VDMA文档，S2MM Status Register (0x34)的位定义：
+ *   - 位0: Halted
+ *   - 位1: VDMAIntErr  
+ *   - 位4: VDMASlvErr
+ *   - 位5: VDMADecErr
+ *   - 位16-23: Frame_Count (当前帧号)
+ *   - 位24-31: Delay_Count
  */
 int vdma_get_current_frame(vdma_control_t *vdma)
 {
     if (!vdma || !vdma->base_addr) {
         return -1;
     }
-    
+
+    /*
+     * 说明：
+     * 你现在遇到的“帧号一直不变”很常见，原因是：
+     * - 有些VDMA配置下，S2MM_DMASR(0x34) 的高位并不是“当前写入帧号”
+     * - 正确获取当前写入帧，通常应读 Park Pointer Register(0x28)
+     *   其中包含当前读/写帧指针（不同IP配置位宽可能略有差异）
+     *
+     * 这里采用“优先ParkPtr，失败再回退Status”的策略：
+     */
+    uint32_t park = *(volatile uint32_t*)(vdma->base_addr + VDMA_PARK_PTR);
+    /* 常见定义：bits[12:8] 为 Write Frame Pointer（最多32帧存储） */
+    int write_frame = (park >> 8) & 0x1F;
+    if (write_frame >= 0 && write_frame < 32) {
+        return write_frame % vdma->num_frames;
+    }
+
+    /* 回退：保持旧逻辑（用于某些确实把帧计数放在status里的配置） */
     uint32_t status = *(volatile uint32_t*)(vdma->base_addr + VDMA_S2MM_STATUS);
-    int frame = (status >> 24) & 0x3;  /* Frame Count字段（位24-25） */
-    
-    return frame;
+    int frame = (status >> 16) & 0xFF;
+    return frame % vdma->num_frames;
 }
 
 /**

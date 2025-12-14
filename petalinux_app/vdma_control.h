@@ -22,6 +22,7 @@
 /* VDMA S2MM (Stream to Memory Mapped) 寄存器偏移 */
 #define VDMA_S2MM_CONTROL       0x30
 #define VDMA_S2MM_STATUS        0x34
+#define VDMA_PARK_PTR           0x28  /* Park Pointer Register (含当前读/写帧指针) */
 #define VDMA_S2MM_VSIZE         0xA0
 #define VDMA_S2MM_HSIZE         0xA4
 #define VDMA_S2MM_STRIDE        0xA8
@@ -60,9 +61,9 @@ typedef struct {
  * @param vdma VDMA控制结构指针
  * @param width 视频宽度（像素）
  * @param height 视频高度（像素）
- * @param bytes_per_pixel 每像素字节数（如RGB888为3，RGBA为4）
+ * @param bytes_per_pixel 每像素字节数（本项目YUV422/YUYV为2）
  * @param num_frames 帧缓冲数量（建议3个，用于三缓冲）
- * @param frame_buffer_phys 帧缓冲物理地址（必须与设备树reserved-memory一致）
+ * @param frame_buffer_phys 帧缓冲物理地址（0x20000000，与设备树reserved-memory一致）
  * @return 0成功，-1失败
  */
 int vdma_init(vdma_control_t *vdma, int width, int height, 

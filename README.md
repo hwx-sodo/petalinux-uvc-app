@@ -1,161 +1,269 @@
-# ZynqMP UVC Camera Gadget
+# ZynqMP 以太网视频传输系统
 
-这是一个用于 ZynqMP 开发板的 UVC (USB Video Class) Camera Gadget 配置项目。
+这是一个用于 ZynqMP 开发板的视频传输项目，通过以太网 (UDP/TCP) 传输视频流到PC端。
 
 ## 项目结构
 
 ```
 /workspace/
-├── setup_rgba_fixed.sh     # RGBA 格式配置脚本 (原版)
-├── setup_rgba_fixed_v2.sh  # RGBA 格式配置脚本 (修复版 v2)
-├── setup_uvc.sh            # 通用 UVC 配置脚本
-├── cleanup_gadget.sh       # 清理 USB Gadget 配置
-├── debug_uvc.sh            # 调试诊断工具
-├── run_uvc.sh              # 一键启动脚本
+├── run_network_stream.sh   # 网络视频传输启动脚本
+├── receive_stream.py       # PC端接收程序 (Python)
 └── petalinux_app/          # 用户空间应用程序源码
+    ├── network_stream.c    # 网络传输应用主程序
+    ├── vdma_control.c/h    # VDMA控制模块
+    └── Makefile            # 编译配置
 ```
 
 ## 快速开始
 
-### 1. 配置 USB Gadget
+### 软件依赖
+
+| 端 | 需要安装 | 说明 |
+|----|---------|------|
+| **PC端** | ✅ OpenCV + NumPy | 用于显示和保存视频 |
+| **开发板** | ❌ 不需要 | 纯C程序，无额外依赖 |
 
 ```bash
-# 使用修复版脚本 (推荐)
-sudo /setup_rgba_fixed_v2.sh
-
-# 或使用原版脚本
-sudo /setup_uvc.sh
+# 只在PC上安装
+pip install opencv-python numpy
 ```
 
-### 2. 运行视频流
+### 使用步骤（3步）
+
+**第1步：PC端启动接收（⚠️ 必须先启动！）**
+```bash
+python receive_stream.py -p 5000
+```
+
+**第2步：开发板配置IP并启动发送**
+```bash
+# 配置开发板IP（首次需要）
+ifconfig eth0 10.72.43.10 netmask 255.255.0.0 up
+
+# 启动发送（很多PetaLinux系统没有sudo；root用户直接运行即可）
+./run_network_stream.sh 10.72.43.200
+```
+
+**第3步：查看视频**
+- PC上会弹出视频窗口
+- 按 'q' 键退出
+
+### 其他选项
 
 ```bash
-sudo /run_uvc.sh
+# TCP模式（可靠传输，两端都加-t）
+python receive_stream.py -p 5000 -t                    # PC端
+./run_network_stream.sh 10.72.43.200 5000 tcp     # 开发板
+
+# 保存视频到文件
+python receive_stream.py -p 5000 -o output.avi
+
+# 调试模式（查看详细信息）
+python receive_stream.py -p 5000 -d                    # PC端
+./run_network_stream.sh 10.72.43.200 5000 udp debug  # 开发板
+
+# 强制发送模式（忽略帧变化检测，用于测试网络）
+./run_network_stream.sh 10.72.43.200 5000 udp force  # 开发板
+
+# 调试+强制模式
+./run_network_stream.sh 10.72.43.200 5000 udp debug force
 ```
 
-## 常见问题
+## 编译说明
 
-### 错误: `failed to start g1: -19`
+### 在PetaLinux SDK中编译
 
-**完整错误信息:**
-```
-[   85.452619] configfs-gadget gadget: uvc: uvc_function_bind()
-[   85.458347] configfs-gadget fe200000.dwc3: failed to start g1: -19
-/setup_rgba_fixed.sh: line 103: echo: write error: No such device
-```
-
-**原因分析:**
-
-错误码 `-19` 对应 `ENODEV` (No such device)。这表示 USB Device Controller (UDC) 无法启动 gadget。
-
-**可能的原因:**
-
-1. **USB 控制器模式不正确**
-   - USB 控制器配置为 Host 模式而非 Peripheral/Device 模式
-   - 需要在设备树中设置 `dr_mode = "peripheral"`
-
-2. **USB PHY 未正确初始化**
-   - USB PHY 电源未开启
-   - PHY 时钟配置错误
-
-3. **OTG 模式冲突**
-   - 如果使用 OTG 模式，可能 ID 引脚检测到 Host 模式
-
-4. **硬件连接问题**
-   - USB 线未连接
-   - USB Type-C 方向问题
-
-**解决方法:**
-
-1. **运行调试脚本检查系统状态:**
-   ```bash
-   sudo /debug_uvc.sh
-   ```
-
-2. **检查设备树 USB 配置:**
-   ```bash
-   # 查看 dr_mode 设置
-   cat /proc/device-tree/axi/usb0@*/dwc3@*/dr_mode
-   # 或
-   cat /sys/firmware/devicetree/base/axi/usb*/dwc3*/dr_mode
-   ```
-   
-   正确的设置应该是 `peripheral` 或 `otg`
-
-3. **检查 UDC 状态:**
-   ```bash
-   ls /sys/class/udc/
-   cat /sys/class/udc/*/state
-   ```
-
-4. **查看内核日志:**
-   ```bash
-   dmesg | grep -iE "(dwc3|usb|udc|gadget)"
-   ```
-
-5. **如果使用 OTG 模式，确保 ID 引脚接地:**
-   - 在 OTG 模式下，ID 引脚低电平 = Device 模式
-   - ID 引脚高电平/浮空 = Host 模式
-
-### 设备树修改示例
-
-如果需要修改设备树，确保 USB 节点配置如下：
-
-```dts
-&dwc3_0 {
-    status = "okay";
-    dr_mode = "peripheral";  /* 或 "otg" */
-    maximum-speed = "super-speed";
-    snps,dis_u2_susphy_quirk;
-    snps,dis_u3_susphy_quirk;
-};
-```
-
-### 内核配置要求
-
-确保内核启用了以下选项：
-
-```
-CONFIG_USB_GADGET=y
-CONFIG_USB_CONFIGFS=y
-CONFIG_USB_CONFIGFS_F_UVC=y
-CONFIG_USB_F_UVC=m  # 或 =y
-CONFIG_USB_LIBCOMPOSITE=y
-```
-
-## 脚本说明
-
-### setup_rgba_fixed_v2.sh (推荐)
-
-修复版配置脚本，相比原版改进：
-- 添加了 High Speed (hs) 链接支持
-- 增加了详细的调试信息
-- 更好的错误处理和提示
-
-### debug_uvc.sh
-
-诊断工具，可检查：
-- ConfigFS 状态
-- UDC 控制器状态
-- 内核模块加载情况
-- 设备树配置
-- 内核日志
-
-### cleanup_gadget.sh
-
-用于清理失败的 gadget 配置：
 ```bash
-sudo /cleanup_gadget.sh
+# 设置SDK环境
+source /path/to/sdk/environment-setup-aarch64-xilinx-linux
+
+# 进入源码目录
+cd petalinux_app
+
+# 编译
+make
+
+# 清理
+make clean
+```
+
+### 手动交叉编译
+
+```bash
+# 使用aarch64交叉编译器
+make CC=aarch64-linux-gnu-gcc
+```
+
+### Makefile 使用
+
+```bash
+make           # 编译eth-camera-app
+make all       # 编译eth-camera-app
+make clean     # 清理编译产物
+make install   # 安装到目标系统
+make help      # 显示帮助信息
 ```
 
 ## 技术参数
 
-- **视频格式**: RGBA (32-bit)
-- **分辨率**: 640x480
-- **帧率**: 60 fps
-- **帧大小**: 1,228,800 bytes
+### 视频参数
+
+| 参数 | 值 |
+|------|-----|
+| 视频格式 | YUV422 (YUYV, 16-bit/像素) |
+| 分辨率 | 640x480 |
+| 帧率 | 60 fps |
+| 帧大小 | 614,400 bytes |
+| 带宽需求 | ~36.9 MB/s (~295 Mbps) |
+
+### 硬件地址
+
+| 参数 | 值 |
+|------|-----|
+| 帧缓冲区物理地址 | 0x20000000 |
+| 帧缓冲区大小 | 由你的系统规划决定 |
+| VDMA基地址 | 0x80020000 |
+
+### 网络传输参数
+
+| 参数 | UDP模式 | TCP模式 |
+|------|---------|---------|
+| 默认端口 | 5000 | 5000 |
+| 分片大小 | 1400 bytes | 无分片 |
+| 延迟 | 低 | 中等 |
+| 可靠性 | 可能丢帧 | 可靠 |
+| 推荐场景 | 实时预览 | 录制保存 |
+
+### 网络带宽要求
+
+- **理论带宽**: 640 × 480 × 2 × 60 = 36.9 MB/s ≈ 295 Mbps
+- **推荐使用千兆以太网** (1 Gbps)
+- 百兆网络可能出现丢帧
+
+## 常见问题
+
+### 1. 接收端收到数据但帧数为0
+
+**症状:**
+- 接收端显示收到了数据（如1.1MB），但帧数始终为0
+- 开发板端没有显示"已发送 X 帧"的统计
+
+**原因分析:**
+这通常是因为VDMA的帧号没有变化。代码中有帧变化检测逻辑，如果VDMA帧号不变，会跳过发送。
+
+**解决方法:**
+```bash
+# 方法1: 使用调试模式查看详细信息
+./run_network_stream.sh 10.72.43.200 5000 udp debug
+
+# 方法2: 使用强制发送模式（忽略帧变化检测）
+./run_network_stream.sh 10.72.43.200 5000 udp force
+
+# 方法3: 同时使用调试和强制模式
+./run_network_stream.sh 10.72.43.200 5000 udp debug force
+
+# PC端使用调试模式
+python receive_stream.py -p 5000 -d
+```
+
+**调试输出说明:**
+- `[DEBUG] 帧号未变化，已跳过 X 次` - VDMA没有产生新帧
+- `[DEBUG] 无效帧头` - 收到的数据不是有效帧格式
+- `[DEBUG] 帧缓冲前16字节` - 显示实际帧数据内容
+
+### 2. 接收端收不到数据
+
+**排查步骤:**
+```bash
+# 1. 检查网络连通性
+ping <开发板IP>
+
+# 2. 检查防火墙设置（Windows）
+# 打开 Windows Defender 防火墙 → 高级设置 → 入站规则
+# 添加允许端口5000的规则
+
+# 3. 检查防火墙设置（Linux）
+sudo ufw allow 5000/udp
+sudo ufw allow 5000/tcp
+```
+
+### 3. VDMA错误
+
+**症状:**
+```
+VDMA状态: 0x00010000
+```
+
+**可能原因:**
+- 视频输入源未连接或未启动
+- 时钟配置问题
+- 设备树配置错误
+
+**排查步骤:**
+```bash
+# 检查UIO设备
+ls -la /dev/uio*
+
+# 检查VDMA物理地址（UIO映射）
+cat /sys/class/uio/uio*/maps/map0/addr
+```
+
+### 4. 视频卡顿或延迟高
+
+**可能原因:**
+- 网络带宽不足
+- CPU占用过高
+- 使用了WiFi而非有线
+
+**解决方法:**
+- 使用有线千兆网络连接
+- 关闭其他占用网络的程序
+- 降低视频分辨率或帧率
+
+### 5. UDP模式丢帧严重
+
+**解决方法:**
+```bash
+# 方法1: 增加系统接收缓冲区
+sudo sysctl -w net.core.rmem_max=8388608
+sudo sysctl -w net.core.rmem_default=8388608
+
+# 方法2: 切换到TCP模式
+python receive_stream.py -p 5000 -t
+```
+
+### 6. 编译错误
+
+```bash
+# 确保安装了必要的开发工具
+# 在PetaLinux SDK环境中编译
+source /path/to/sdk/environment-setup-xxx
+
+# 编译
+cd petalinux_app
+make
+```
 
 ## 版本历史
 
-- v2.0: 添加 hs 链接支持，改进错误诊断
-- v1.0: 初始 RGBA 格式支持
+- **v5.1** (2025-12):
+  - 项目收敛为单一格式：仅支持 YUV422(YUYV)
+  - 帧缓冲物理地址统一为 0x20000000（按你的系统内存规划）
+
+- **v4.0** (2024-12):
+  - 移除USB UVC功能，专注以太网传输
+  - 简化项目结构
+  - 目标程序重命名为 eth-camera-app
+
+- **v3.0**: 
+  - 新增网络传输功能 (UDP/TCP)
+  - 添加PC端Python接收程序
+  - 支持视频录制保存
+
+- **v2.0**: 
+  - 添加 hs 链接支持
+  - 改进错误诊断
+
+- **v1.0**:
+  - 初始版本
+  - USB UVC基础功能
