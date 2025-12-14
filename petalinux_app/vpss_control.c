@@ -3,6 +3,9 @@
  * @brief VPSS (Video Processing Subsystem) 控制实现
  */
 
+#define _DEFAULT_SOURCE
+#define _POSIX_C_SOURCE 200809L
+
 #include "vpss_control.h"
 #include <stdio.h>
 #include <stdlib.h>

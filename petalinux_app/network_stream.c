@@ -4,11 +4,11 @@
  * 
  * 功能：
  * 1. 初始化VPSS和VDMA
- * 2. 从DDR读取视频帧（RGBA格式）
+ * 2. 从DDR读取视频帧（YUV422，2字节/像素）
  * 3. 通过UDP/TCP网络发送到PC端
  * 
  * 数据流（两种常见情况）：
- * 1) 走VPSS颜色转换: CameraLink(PL) → VPSS(YUV422→RGB) → VDMA → DDR(RGBA) → 网络 → PC
+ * 1) 走VPSS颜色转换: CameraLink(PL) → VPSS(YUV422→RGB) → VDMA → DDR(RGB相关格式) → 网络 → PC
  * 2) 不走VPSS直写:   CameraLink(PL) → (AXIS宽度转换/打包) → VDMA → DDR(YUV422) → 网络 → PC
  * 
  * 使用方法：
@@ -19,6 +19,9 @@
  *   ./network-stream-app -H 10.72.43.200 -p 5000 -t     # TCP模式
  */
 
+#define _DEFAULT_SOURCE
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +31,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <time.h>
+#include <math.h>
 #include <getopt.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -42,7 +46,7 @@
 /* 视频参数 - 640x480@60fps */
 #define VIDEO_WIDTH     640
 #define VIDEO_HEIGHT    480
-#define BYTES_PER_PIXEL 4    /* 默认: RGBA格式：32位 */
+#define BYTES_PER_PIXEL 2    /* YUV422: 16-bit/像素（2字节/像素） */
 #define NUM_FRAMES      3    /* 三缓冲 */
 
 /* 帧缓冲物理地址 */
@@ -71,7 +75,7 @@ typedef struct __attribute__((packed)) {
     uint32_t frame_num;     /* 帧编号 */
     uint32_t width;         /* 图像宽度 */
     uint32_t height;        /* 图像高度 */
-    uint32_t format;        /* 像素格式: 0=RGBA, 1=YUYV(YUV422), 2=UYVY(YUV422) */
+    uint32_t format;        /* 像素格式: 1=YUYV(YUV422), 2=UYVY(YUV422) */
     uint32_t frame_size;    /* 帧数据大小 */
     uint32_t timestamp_sec; /* 时间戳（秒） */
     uint32_t timestamp_usec;/* 时间戳（微秒） */
@@ -94,7 +98,7 @@ static int debug_mode = 0;  /* 调试模式：打印更多信息 */
 static int force_send = 0;  /* 强制发送模式：忽略帧变化检测 */
 static int diag_only = 0;   /* 仅诊断模式：不进行网络传输 */
 static char save_file[256] = "";  /* 保存帧数据到文件 */
-static int no_vpss = 0;     /* 不初始化/启动VPSS（当硬件链路不经过VPSS时使用） */
+static int no_vpss = 1;     /* 默认不使用VPSS（你现在是YUV422直写VDMA） */
 
 /* 当前视频参数（可通过参数覆盖） */
 static int video_width = VIDEO_WIDTH;
@@ -103,17 +107,16 @@ static int bytes_per_pixel = BYTES_PER_PIXEL;
 static size_t frame_size = 0;
 
 typedef enum {
-    PIXFMT_RGBA = 0,
     PIXFMT_YUYV = 1,
     PIXFMT_UYVY = 2,
 } pixel_format_t;
 
-static pixel_format_t pixel_format = PIXFMT_RGBA;
+static pixel_format_t pixel_format = PIXFMT_YUYV;
+static int pixel_format_forced = 0; /* 用户是否显式指定了格式（否则可做自动判断） */
 
 static const char* pixel_format_to_string(pixel_format_t fmt)
 {
     switch (fmt) {
-        case PIXFMT_RGBA: return "RGBA";
         case PIXFMT_YUYV: return "YUYV (YUV422)";
         case PIXFMT_UYVY: return "UYVY (YUV422)";
         default: return "UNKNOWN";
@@ -123,20 +126,18 @@ static const char* pixel_format_to_string(pixel_format_t fmt)
 static int pixel_format_to_bpp(pixel_format_t fmt)
 {
     switch (fmt) {
-        case PIXFMT_RGBA: return 4;
         case PIXFMT_YUYV: return 2;
         case PIXFMT_UYVY: return 2;
-        default: return 4;
+        default: return 2;
     }
 }
 
 static pixel_format_t parse_pixel_format(const char *s)
 {
-    if (!s) return PIXFMT_RGBA;
-    if (strcasecmp(s, "rgba") == 0) return PIXFMT_RGBA;
+    if (!s) return PIXFMT_YUYV;
     if (strcasecmp(s, "yuyv") == 0) return PIXFMT_YUYV;
     if (strcasecmp(s, "uyvy") == 0) return PIXFMT_UYVY;
-    return PIXFMT_RGBA;
+    return PIXFMT_YUYV;
 }
 
 static void hexdump_bytes(const uint8_t *p, size_t len)
@@ -165,6 +166,13 @@ static void dump_first_words(const uint8_t *p, size_t len)
     }
     printf("\n");
 
+    printf("  16bit(BE) 前%zu个: ", w16);
+    for (size_t i = 0; i < w16; i++) {
+        uint16_t v = ((uint16_t)p[i * 2] << 8) | (uint16_t)p[i * 2 + 1];
+        printf("%04X ", v);
+    }
+    printf("\n");
+
     size_t w32 = (n / 4);
     printf("  32bit(LE) 前%zu个: ", w32);
     for (size_t i = 0; i < w32; i++) {
@@ -175,6 +183,97 @@ static void dump_first_words(const uint8_t *p, size_t len)
         printf("%08X ", v);
     }
     printf("\n");
+
+    printf("  32bit(BE) 前%zu个: ", w32);
+    for (size_t i = 0; i < w32; i++) {
+        uint32_t v = ((uint32_t)p[i * 4] << 24) |
+                     ((uint32_t)p[i * 4 + 1] << 16) |
+                     ((uint32_t)p[i * 4 + 2] << 8) |
+                     (uint32_t)p[i * 4 + 3];
+        printf("%08X ", v);
+    }
+    printf("\n");
+}
+
+/**
+ * 自动判断YUV422打包格式（YUYV vs UYVY）
+ *
+ * 原理（经验法则）：
+ * - Y分量（亮度）变化通常更大
+ * - U/V分量（色度）在自然图像中更平滑，且均值经常接近128
+ *
+ * 我们分别假设：
+ * - YUYV: [Y0 U0 Y1 V0] => 色度在字节1/3，亮度在字节0/2
+ * - UYVY: [U0 Y0 V0 Y1] => 色度在字节0/2，亮度在字节1/3
+ *
+ * 计算两种假设下“色度方差/亮度方差”的比值，并结合色度均值接近128的程度做评分。
+ */
+static pixel_format_t detect_yuv422_format(const uint8_t *buf, size_t len, int verbose)
+{
+    if (!buf || len < 1024) return PIXFMT_YUYV;
+
+    /* 采样上限，避免太慢（对调试足够） */
+    size_t max_len = len > (256 * 1024) ? (256 * 1024) : len;
+    size_t groups = (max_len / 4);
+    if (groups < 64) return PIXFMT_YUYV;
+
+    /* 累积：均值/方差用二阶矩近似 */
+    double sum_c_yuyv = 0, sum2_c_yuyv = 0, sum_y_yuyv = 0, sum2_y_yuyv = 0;
+    double sum_c_uyvy = 0, sum2_c_uyvy = 0, sum_y_uyvy = 0, sum2_y_uyvy = 0;
+
+    for (size_t g = 0; g < groups; g++) {
+        const uint8_t b0 = buf[g * 4 + 0];
+        const uint8_t b1 = buf[g * 4 + 1];
+        const uint8_t b2 = buf[g * 4 + 2];
+        const uint8_t b3 = buf[g * 4 + 3];
+
+        /* 假设YUYV：色度=b1,b3  亮度=b0,b2 */
+        const double c1 = (double)b1;
+        const double c2 = (double)b3;
+        const double y1 = (double)b0;
+        const double y2 = (double)b2;
+        sum_c_yuyv += (c1 + c2);
+        sum2_c_yuyv += (c1 * c1 + c2 * c2);
+        sum_y_yuyv += (y1 + y2);
+        sum2_y_yuyv += (y1 * y1 + y2 * y2);
+
+        /* 假设UYVY：色度=b0,b2  亮度=b1,b3 */
+        const double c3 = (double)b0;
+        const double c4 = (double)b2;
+        const double y3 = (double)b1;
+        const double y4 = (double)b3;
+        sum_c_uyvy += (c3 + c4);
+        sum2_c_uyvy += (c3 * c3 + c4 * c4);
+        sum_y_uyvy += (y3 + y4);
+        sum2_y_uyvy += (y3 * y3 + y4 * y4);
+    }
+
+    const double n = (double)(groups * 2); /* 每组2个色度样本/2个亮度样本 */
+
+    const double mean_c_yuyv = sum_c_yuyv / n;
+    const double var_c_yuyv = (sum2_c_yuyv / n) - (mean_c_yuyv * mean_c_yuyv);
+    const double mean_y_yuyv = sum_y_yuyv / n;
+    const double var_y_yuyv = (sum2_y_yuyv / n) - (mean_y_yuyv * mean_y_yuyv);
+
+    const double mean_c_uyvy = sum_c_uyvy / n;
+    const double var_c_uyvy = (sum2_c_uyvy / n) - (mean_c_uyvy * mean_c_uyvy);
+    const double mean_y_uyvy = sum_y_uyvy / n;
+    const double var_y_uyvy = (sum2_y_uyvy / n) - (mean_y_uyvy * mean_y_uyvy);
+
+    /* 评分：越小越像“色度更平滑 + 均值接近128 + 亮度变化更大” */
+    const double eps = 1.0;
+    const double score_yuyv = ((var_c_yuyv + eps) / (var_y_yuyv + eps)) + (fabs(mean_c_yuyv - 128.0) / 128.0);
+    const double score_uyvy = ((var_c_uyvy + eps) / (var_y_uyvy + eps)) + (fabs(mean_c_uyvy - 128.0) / 128.0);
+
+    if (verbose) {
+        printf("[DEBUG] YUV422格式自动判断（采样%zu字节，%zu组）:\n", max_len, groups);
+        printf("[DEBUG]   假设YUYV: mean(C)=%.1f var(C)=%.1f mean(Y)=%.1f var(Y)=%.1f score=%.3f\n",
+               mean_c_yuyv, var_c_yuyv, mean_y_yuyv, var_y_yuyv, score_yuyv);
+        printf("[DEBUG]   假设UYVY: mean(C)=%.1f var(C)=%.1f mean(Y)=%.1f var(Y)=%.1f score=%.3f\n",
+               mean_c_uyvy, var_c_uyvy, mean_y_uyvy, var_y_uyvy, score_uyvy);
+    }
+
+    return (score_uyvy < score_yuyv) ? PIXFMT_UYVY : PIXFMT_YUYV;
 }
 
 /* ==================== 信号处理 ==================== */
@@ -287,10 +386,10 @@ int send_frame_header(int sock, uint32_t frame_num)
     
     header.magic = htonl(FRAME_MAGIC);
     header.frame_num = htonl(frame_num);
-    header.width = htonl(VIDEO_WIDTH);
-    header.height = htonl(VIDEO_HEIGHT);
-    header.format = htonl(0);  /* RGBA */
-    header.frame_size = htonl(FRAME_SIZE);
+    header.width = htonl((uint32_t)video_width);
+    header.height = htonl((uint32_t)video_height);
+    header.format = htonl((uint32_t)pixel_format);
+    header.frame_size = htonl((uint32_t)frame_size);
     header.timestamp_sec = htonl(ts.tv_sec);
     header.timestamp_usec = htonl(ts.tv_nsec / 1000);
     
@@ -559,10 +658,11 @@ void check_frame_buffer(vdma_control_t *vdma)
                frame, phys_addr, frame_size);
         printf("├──────────────────────────────────────────────────────────────┤\n");
         
-        /* 多个位置的数据 */
-        int offsets[] = {0, vdma->width * 4, vdma->width * 4 * 100, 
-                         frame_size / 2, vdma->width * 4 * 400, frame_size - vdma->width * 4};
-        const char *names[] = {"行0 (开头)", "行1      ", "行100    ", 
+        /* 多个位置的数据（按stride取一行） */
+        int stride = vdma->width * vdma->bytes_per_pixel;
+        int offsets[] = {0, stride, stride * 100,
+                         frame_size / 2, stride * 400, frame_size - stride};
+        const char *names[] = {"行0 (开头)", "行1      ", "行100    ",
                                "行240(中间)", "行400    ", "最后一行 "};
         
         for (int p = 0; p < 6; p++) {
@@ -576,14 +676,24 @@ void check_frame_buffer(vdma_control_t *vdma)
             }
             printf("│\n");
             
-            /* 按ARGB {A,R,G,B} 解析 */
-            printf("│   ARGB: ");
-            for (int i = 0; i < 4; i++) {
-                int idx = offset + i * 4;
+            /* YUV422常见打包：每2像素占4字节 */
+            printf("│   YUV422(每4字节=2像素): ");
+            for (int g = 0; g < 4; g++) {
+                int idx = offset + g * 4;
                 if (idx + 3 < frame_size) {
-                    printf("A%d,R%d,G%d,B%d ", 
-                           frame_start[idx], frame_start[idx+1], 
-                           frame_start[idx+2], frame_start[idx+3]);
+                    uint8_t b0 = frame_start[idx + 0];
+                    uint8_t b1 = frame_start[idx + 1];
+                    uint8_t b2 = frame_start[idx + 2];
+                    uint8_t b3 = frame_start[idx + 3];
+                    if (pixel_format == PIXFMT_YUYV) {
+                        /* Y0 U0 Y1 V0 */
+                        printf("(Y0=%3d U=%3d Y1=%3d V=%3d) ", b0, b1, b2, b3);
+                    } else if (pixel_format == PIXFMT_UYVY) {
+                        /* U0 Y0 V0 Y1 */
+                        printf("(U=%3d Y0=%3d V=%3d Y1=%3d) ", b0, b1, b2, b3);
+                    } else {
+                        printf("(%02X %02X %02X %02X) ", b0, b1, b2, b3);
+                    }
                 }
             }
             printf("│\n");
@@ -606,14 +716,12 @@ void check_frame_buffer(vdma_control_t *vdma)
                count_ff, frame_size, 100.0 * count_ff / frame_size);
         printf("│   0x00 字节: %7d / %d (%.1f%%)                        │\n", 
                count_00, frame_size, 100.0 * count_00 / frame_size);
-        printf("│   通道0均值: %6.1f (如果ARGB格式，这是Alpha)              │\n", 
-               (float)byte_sum[0] / pixels);
-        printf("│   通道1均值: %6.1f (如果ARGB格式，这是Red)                │\n", 
-               (float)byte_sum[1] / pixels);
-        printf("│   通道2均值: %6.1f (如果ARGB格式，这是Green)              │\n", 
-               (float)byte_sum[2] / pixels);
-        printf("│   通道3均值: %6.1f (如果ARGB格式，这是Blue)               │\n", 
-               (float)byte_sum[3] / pixels);
+        /* 简单的YUV统计提示（仅供“字节序/打包”排查） */
+        double b0_mean = (double)byte_sum[0] / pixels;
+        double b1_mean = (double)byte_sum[1] / pixels;
+        printf("│   字节位0均值: %6.1f                                       │\n", b0_mean);
+        printf("│   字节位1均值: %6.1f                                       │\n", b1_mean);
+        printf("│   提示: 若为YUYV，字节位1/3常更接近128(U/V)；若为UYVY，字节位0/2更接近128 │\n");
         
         /* 判断数据状态 */
         printf("├──────────────────────────────────────────────────────────────┤\n");
@@ -675,10 +783,11 @@ int main_loop()
     last_status_time = start_time;
     
     printf("\n开始网络视频流传输...\n");
-    printf("分辨率: %dx%d@%dfps (RGBA格式)\n", VIDEO_WIDTH, VIDEO_HEIGHT, TARGET_FPS);
+    printf("分辨率: %dx%d@%dfps (格式: %s)\n",
+           video_width, video_height, TARGET_FPS, pixel_format_to_string(pixel_format));
     printf("协议: %s, 目标: %s:%d\n", use_tcp ? "TCP" : "UDP", target_host, target_port);
-    printf("帧大小: %d bytes (%.2f MB/s)\n", FRAME_SIZE, 
-           (float)FRAME_SIZE * TARGET_FPS / 1024 / 1024);
+    printf("帧大小: %zu bytes (%.2f MB/s)\n", frame_size,
+           (float)frame_size * TARGET_FPS / 1024 / 1024);
     printf("调试模式: %s\n", debug_mode ? "开启" : "关闭");
     printf("强制发送: %s\n", force_send ? "开启（忽略帧变化检测）" : "关闭");
     printf("按Ctrl+C退出\n\n");
@@ -725,40 +834,43 @@ int main_loop()
         last_vdma_frame = current_vdma_frame;
         
         /* 获取帧数据 */
-        const uint8_t *rgba_frame = (uint8_t*)vdma.frame_buffer + (read_frame * FRAME_SIZE);
+        const uint8_t *frame_data = (uint8_t*)vdma.frame_buffer + ((size_t)read_frame * frame_size);
         
         /* 调试：第一帧时打印帧数据信息 */
         if (debug_mode && frame_count == 0) {
             printf("[DEBUG] 发送第一帧，读取帧缓冲 #%d (地址偏移: 0x%X)\n", 
-                   read_frame, read_frame * FRAME_SIZE);
-            printf("[DEBUG] 帧数据 开头16字节: ");
-            for (int i = 0; i < 16; i++) {
-                printf("%02X ", rgba_frame[i]);
+                   read_frame, (unsigned)((size_t)read_frame * frame_size));
+            printf("[DEBUG] 帧数据（用于判断字节序/打包方式）:\n");
+            dump_first_words(frame_data, frame_size);
+
+            if (!pixel_format_forced) {
+                pixel_format_t detected = detect_yuv422_format(frame_data, frame_size, 1);
+                if (detected != pixel_format) {
+                    printf("[DEBUG] 自动判断结果: %s（将覆盖默认）\n", pixel_format_to_string(detected));
+                    pixel_format = detected;
+                } else {
+                    printf("[DEBUG] 自动判断结果: %s（与当前一致）\n", pixel_format_to_string(detected));
+                }
+            } else {
+                printf("[DEBUG] 像素格式由参数强制指定: %s\n", pixel_format_to_string(pixel_format));
             }
-            printf("\n");
             
             /* 检查中间部分 */
-            int mid_offset = FRAME_SIZE / 2;
-            printf("[DEBUG] 帧数据 中间16字节: ");
-            for (int i = 0; i < 16; i++) {
-                printf("%02X ", rgba_frame[mid_offset + i]);
-            }
-            printf("\n");
+            size_t mid_offset = frame_size / 2;
+            printf("[DEBUG] 帧数据 中间32字节:\n");
+            dump_first_words(frame_data + mid_offset, frame_size - mid_offset);
             
             /* 检查末尾部分 */
-            int end_offset = FRAME_SIZE - 16;
-            printf("[DEBUG] 帧数据 末尾16字节: ");
-            for (int i = 0; i < 16; i++) {
-                printf("%02X ", rgba_frame[end_offset + i]);
-            }
-            printf("\n");
+            size_t end_offset = (frame_size > 32) ? (frame_size - 32) : 0;
+            printf("[DEBUG] 帧数据 末尾32字节:\n");
+            dump_first_words(frame_data + end_offset, frame_size - end_offset);
             
             /* 统计非FF字节比例 */
             int non_ff_count = 0;
-            for (int i = 0; i < FRAME_SIZE; i += 256) {
-                if (rgba_frame[i] != 0xFF) non_ff_count++;
+            for (size_t i = 0; i < frame_size; i += 256) {
+                if (frame_data[i] != 0xFF) non_ff_count++;
             }
-            int samples = FRAME_SIZE / 256;
+            int samples = (int)(frame_size / 256);
             printf("[DEBUG] 非0xFF数据比例: %d/%d (%.1f%%)\n", 
                    non_ff_count, samples, 100.0 * non_ff_count / samples);
         }
@@ -766,9 +878,9 @@ int main_loop()
         /* 发送帧 */
         int ret;
         if (use_tcp) {
-            ret = send_frame_tcp(sock_fd, rgba_frame, FRAME_SIZE, frame_count);
+            ret = send_frame_tcp(sock_fd, frame_data, frame_size, frame_count);
         } else {
-            ret = send_frame_udp(sock_fd, rgba_frame, FRAME_SIZE, frame_count);
+            ret = send_frame_udp(sock_fd, frame_data, frame_size, frame_count);
         }
         
         if (ret < 0) {
@@ -787,7 +899,7 @@ int main_loop()
             double elapsed = (current_time.tv_sec - start_time.tv_sec) + 
                            (current_time.tv_nsec - start_time.tv_nsec) / 1e9;
             double fps = frame_count / elapsed;
-            double bitrate = (double)FRAME_SIZE * frame_count * 8 / elapsed / 1e6;
+            double bitrate = (double)frame_size * frame_count * 8 / elapsed / 1e6;
             
             printf("已发送 %d 帧 (FPS: %.1f, 码率: %.1f Mbps", 
                    frame_count, fps, bitrate);
@@ -821,6 +933,8 @@ void print_usage(const char *prog)
     printf("  -d, --debug          调试模式，打印详细诊断信息\n");
     printf("  -D, --diag           仅诊断模式，不进行网络传输\n");
     printf("  -s, --save <文件>    保存帧0数据到文件\n");
+    printf("  -F, --format <fmt>   YUV422打包: yuyv | uyvy (默认: yuyv；调试时也可自动判断)\n");
+    printf("  -n, --no-vpss        不初始化/启动VPSS（默认开启，适用于YUV422直写VDMA）\n");
     printf("  -h, --help           显示帮助信息\n");
     printf("\n示例:\n");
     printf("  %s -H 10.72.43.200 -p 5000        # UDP模式发送\n", prog);
@@ -848,12 +962,14 @@ int main(int argc, char **argv)
         {"force", no_argument,       0, 'f'},
         {"diag",  no_argument,       0, 'D'},
         {"save",  required_argument, 0, 's'},
+        {"format", required_argument, 0, 'F'},
+        {"no-vpss", no_argument,      0, 'n'},
         {"help",  no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
     
     int opt;
-    while ((opt = getopt_long(argc, argv, "H:p:tdfDs:h", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "H:p:tdfDs:F:nh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'H':
                 strncpy(target_host, optarg, sizeof(target_host) - 1);
@@ -879,6 +995,14 @@ int main(int argc, char **argv)
                 diag_only = 1;   /* 保存文件也进入诊断模式 */
                 debug_mode = 1;
                 break;
+            case 'F':
+                pixel_format = parse_pixel_format(optarg);
+                bytes_per_pixel = pixel_format_to_bpp(pixel_format);
+                pixel_format_forced = 1;
+                break;
+            case 'n':
+                no_vpss = 1;
+                break;
             case 'h':
             case '?':
             default:
@@ -886,6 +1010,10 @@ int main(int argc, char **argv)
                 return 0;
         }
     }
+
+    /* 统一计算frame_size（后续所有逻辑都依赖它） */
+    bytes_per_pixel = pixel_format_to_bpp(pixel_format);
+    frame_size = (size_t)video_width * (size_t)video_height * (size_t)bytes_per_pixel;
     
     printf("========================================\n");
     printf("网络视频流传输应用\n");
@@ -897,18 +1025,22 @@ int main(int argc, char **argv)
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     
-    /* 初始化VPSS */
-    printf("[1/5] 初始化VPSS...\n");
-    if (vpss_init(&vpss, VIDEO_WIDTH, VIDEO_HEIGHT) < 0) {
-        fprintf(stderr, "VPSS初始化失败\n");
-        ret = 1;
-        goto cleanup;
+    /* 初始化VPSS（默认跳过：你现在是YUV422直写VDMA） */
+    if (!no_vpss) {
+        printf("[1/5] 初始化VPSS...\n");
+        if (vpss_init(&vpss, video_width, video_height) < 0) {
+            fprintf(stderr, "VPSS初始化失败\n");
+            ret = 1;
+            goto cleanup;
+        }
+    } else {
+        printf("[1/5] 跳过VPSS初始化 (--no-vpss)\n");
     }
     
     /* 初始化VDMA */
     printf("\n[2/5] 初始化VDMA...\n");
-    if (vdma_init(&vdma, VIDEO_WIDTH, VIDEO_HEIGHT, 
-                  BYTES_PER_PIXEL, NUM_FRAMES,
+    if (vdma_init(&vdma, video_width, video_height,
+                  bytes_per_pixel, NUM_FRAMES,
                   FRAME_BUFFER_PHYS) < 0) {
         fprintf(stderr, "VDMA初始化失败\n");
         ret = 1;
@@ -923,13 +1055,17 @@ int main(int argc, char **argv)
         goto cleanup;
     }
     
-    /* 启动VPSS */
-    printf("\n[4/5] 启动VPSS...\n");
-    usleep(10000);
-    if (vpss_start(&vpss) < 0) {
-        fprintf(stderr, "VPSS启动失败\n");
-        ret = 1;
-        goto cleanup;
+    /* 启动VPSS（可选） */
+    if (!no_vpss) {
+        printf("\n[4/5] 启动VPSS...\n");
+        usleep(10000);
+        if (vpss_start(&vpss) < 0) {
+            fprintf(stderr, "VPSS启动失败\n");
+            ret = 1;
+            goto cleanup;
+        }
+    } else {
+        printf("\n[4/5] 跳过VPSS启动 (--no-vpss)\n");
     }
     
     /* 等待数据流稳定 */
@@ -938,7 +1074,11 @@ int main(int argc, char **argv)
     
     /* 诊断模式：打印详细寄存器信息 */
     if (debug_mode) {
-        dump_vpss_registers(&vpss);
+        if (!no_vpss) {
+            dump_vpss_registers(&vpss);
+        } else {
+            printf("\n[DEBUG] VPSS已跳过，不转储VPSS寄存器\n");
+        }
         dump_vdma_registers(&vdma);
         check_frame_buffer(&vdma);
     }
@@ -981,7 +1121,9 @@ cleanup:
         close(sock_fd);
     }
     
-    vpss_cleanup(&vpss);
+    if (!no_vpss) {
+        vpss_cleanup(&vpss);
+    }
     vdma_cleanup(&vdma);
     
     printf("程序退出\n");

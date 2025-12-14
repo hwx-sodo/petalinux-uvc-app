@@ -3,6 +3,9 @@
  * @brief VDMA (Video DMA) 控制实现
  */
 
+#define _DEFAULT_SOURCE
+#define _POSIX_C_SOURCE 200809L
+
 #include "vdma_control.h"
 #include <stdio.h>
 #include <stdlib.h>

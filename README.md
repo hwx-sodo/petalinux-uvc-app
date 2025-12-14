@@ -63,6 +63,10 @@ python receive_stream.py -p 5000 -o output.avi
 python receive_stream.py -p 5000 -d                    # PC端
 sudo ./run_network_stream.sh 10.72.43.200 5000 udp debug  # 开发板
 
+# 如果画面颜色不对/花屏：尝试强制YUV422打包格式
+python receive_stream.py -p 5000 -d --force-format uyvy     # PC端强制按UYVY解析
+sudo ./run_network_stream.sh 10.72.43.200 5000 udp debug uyvy  # 开发板强制按UYVY发送（帧头也会标记）
+
 # 强制发送模式（忽略帧变化检测，用于测试网络）
 sudo ./run_network_stream.sh 10.72.43.200 5000 udp force  # 开发板
 
@@ -111,11 +115,11 @@ make help      # 显示帮助信息
 
 | 参数 | 值 |
 |------|-----|
-| 视频格式 | RGBA (32-bit) |
+| 视频格式 | YUV422（YUYV 或 UYVY，16-bit/像素） |
 | 分辨率 | 640x480 |
 | 帧率 | 60 fps |
-| 帧大小 | 1,228,800 bytes |
-| 带宽需求 | ~70 MB/s (~560 Mbps) |
+| 帧大小 | 614,400 bytes |
+| 带宽需求 | ~35 MB/s (~295 Mbps) |
 
 ### 硬件地址
 
@@ -263,6 +267,6 @@ make
   - 添加 hs 链接支持
   - 改进错误诊断
 
-- **v1.0**: 
-  - 初始 RGBA 格式支持
+- **v1.0**:
+  - 初始版本（历史上使用过RGBA，当前已切换为YUV422）
   - USB UVC基础功能

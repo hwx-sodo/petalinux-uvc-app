@@ -28,6 +28,7 @@ NETMASK="255.255.0.0"           # 子网掩码
 APP_PATH="/usr/bin/eth-camera-app"  # 应用程序路径
 DEBUG_MODE=""
 FORCE_MODE=""
+FORMAT_MODE=""
 
 # 检查参数
 if [ $# -lt 1 ]; then
@@ -45,6 +46,8 @@ if [ $# -lt 1 ]; then
     echo "  force     强制发送模式，忽略帧变化检测"
     echo "  diag      仅诊断模式，不进行网络传输"
     echo "  save      诊断并保存帧数据到 frame.bin"
+    echo "  yuyv      强制按YUYV(YUV422)打包发送（默认）"
+    echo "  uyvy      强制按UYVY(YUV422)打包发送"
     echo ""
     echo "示例:"
     echo "  $0 10.72.43.200"
@@ -55,6 +58,7 @@ if [ $# -lt 1 ]; then
     echo "  $0 10.72.43.200 5000 udp debug force # 调试+强制"
     echo "  $0 10.72.43.200 5000 udp diag        # 仅诊断硬件状态"
     echo "  $0 10.72.43.200 5000 udp save        # 诊断并保存帧数据"
+    echo "  $0 10.72.43.200 5000 udp debug uyvy  # 调试并强制UYVY打包"
     echo ""
     echo "PC端接收命令:"
     echo "  python receive_stream.py -p 5000        # UDP模式"
@@ -89,6 +93,12 @@ for arg in "$@"; do
             DIAG_MODE="-D"
             SAVE_MODE="-s frame.bin"
             ;;
+        yuyv)
+            FORMAT_MODE="-F yuyv"
+            ;;
+        uyvy)
+            FORMAT_MODE="-F uyvy"
+            ;;
     esac
 done
 
@@ -122,6 +132,7 @@ echo "协议:   $PROTOCOL"
 [ -n "$FORCE_MODE" ] && echo "强制:   开启"
 [ -n "$DIAG_MODE" ] && echo "诊断:   仅诊断模式（不传输）"
 [ -n "$SAVE_MODE" ] && echo "保存:   帧数据将保存到 frame.bin"
+[ -n "$FORMAT_MODE" ] && echo "格式:   ${FORMAT_MODE#-F }"
 echo ""
 
 # 配置开发板IP（如果没有配置）
@@ -201,6 +212,7 @@ fi
 [ -n "$FORCE_MODE" ] && CMD="$CMD $FORCE_MODE"
 [ -n "$DIAG_MODE" ] && CMD="$CMD $DIAG_MODE"
 [ -n "$SAVE_MODE" ] && CMD="$CMD $SAVE_MODE"
+[ -n "$FORMAT_MODE" ] && CMD="$CMD $FORMAT_MODE"
 
 echo ""
 echo "启动命令: $CMD"
