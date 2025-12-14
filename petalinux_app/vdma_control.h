@@ -22,6 +22,7 @@
 /* VDMA S2MM (Stream to Memory Mapped) 寄存器偏移 */
 #define VDMA_S2MM_CONTROL       0x30
 #define VDMA_S2MM_STATUS        0x34
+#define VDMA_PARK_PTR           0x28  /* Park Pointer Register (含当前读/写帧指针) */
 #define VDMA_S2MM_VSIZE         0xA0
 #define VDMA_S2MM_HSIZE         0xA4
 #define VDMA_S2MM_STRIDE        0xA8

@@ -145,7 +145,7 @@ python -c "import cv2; import numpy; print('安装成功！OpenCV版本:', cv2._
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │ 步骤5: 【后】在开发板上启动发送程序                                 │
-│   $ sudo ./run_network_stream.sh <PC的IP地址>                    │
+│   $ ./run_network_stream.sh <PC的IP地址>                         │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -297,7 +297,7 @@ python receive_stream.py -p 5000 -o output.avi
 
 ```bash
 # 使用启动脚本（推荐）
-sudo ./run_network_stream.sh 10.72.43.200
+./run_network_stream.sh 10.72.43.200
 
 # 或直接运行程序
 sudo ./eth-camera-app -H 10.72.43.200 -p 5000
@@ -421,8 +421,8 @@ sudo sysctl -w net.core.rmem_default=8388608
 # PC端
 python receive_stream.py -p 5000 -t
 
-# 开发板端
-sudo ./run_network_stream.sh 10.72.43.200 5000 tcp
+# 开发板端（root用户直接运行；很多系统没有sudo）
+./run_network_stream.sh 10.72.43.200 5000 tcp
 ```
 
 ---
@@ -480,7 +480,7 @@ cat /proc/device-tree/axi/*vdma*/compatible
 │  $ python receive_stream.py -p 5000                            │
 │                                                                │
 │  【开发板 - 后启动】                                            │
-│  $ sudo ./run_network_stream.sh 10.72.43.200                   │
+│  $ ./run_network_stream.sh 10.72.43.200                        │
 │                                                                │
 │  【退出】按 'q' 键                                              │
 │                                                                │

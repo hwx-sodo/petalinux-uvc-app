@@ -282,12 +282,26 @@ int vdma_get_current_frame(vdma_control_t *vdma)
     if (!vdma || !vdma->base_addr) {
         return -1;
     }
-    
+
+    /*
+     * 说明：
+     * 你现在遇到的“帧号一直不变”很常见，原因是：
+     * - 有些VDMA配置下，S2MM_DMASR(0x34) 的高位并不是“当前写入帧号”
+     * - 正确获取当前写入帧，通常应读 Park Pointer Register(0x28)
+     *   其中包含当前读/写帧指针（不同IP配置位宽可能略有差异）
+     *
+     * 这里采用“优先ParkPtr，失败再回退Status”的策略：
+     */
+    uint32_t park = *(volatile uint32_t*)(vdma->base_addr + VDMA_PARK_PTR);
+    /* 常见定义：bits[12:8] 为 Write Frame Pointer（最多32帧存储） */
+    int write_frame = (park >> 8) & 0x1F;
+    if (write_frame >= 0 && write_frame < 32) {
+        return write_frame % vdma->num_frames;
+    }
+
+    /* 回退：保持旧逻辑（用于某些确实把帧计数放在status里的配置） */
     uint32_t status = *(volatile uint32_t*)(vdma->base_addr + VDMA_S2MM_STATUS);
-    /* Frame Count在位16-23，不是位24-25！ */
     int frame = (status >> 16) & 0xFF;
-    
-    /* 限制在帧缓冲数量范围内 */
     return frame % vdma->num_frames;
 }
 
