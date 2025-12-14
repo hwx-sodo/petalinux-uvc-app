@@ -3,19 +3,25 @@
  * @brief 网络视频流传输应用程序（服务端）
  * 
  * 功能：
- * 1. 初始化VPSS和VDMA
- * 2. 从DDR读取视频帧（RGBA格式）
+ * 1. 初始化VDMA
+ * 2. 从DDR读取视频帧（默认YUV422/YUYV格式）
  * 3. 通过UDP/TCP网络发送到PC端
  * 
  * 数据流：
- * CameraLink(PL) → VPSS(YUV422→RGB) → VDMA → DDR(RGBA) → 网络 → PC
+ * CameraLink(PL, porta[7:0]+portb[7:0]拼成16-bit) →
+ * Video In to AXI4-Stream(16-bit) →
+ * AXI4-Stream Data Width Converter(32-bit) →
+ * VDMA(S2MM写DDR, 32-bit总线) →
+ * DDR(按YUV422/YUYV字节序存储) → 网络 → PC(OpenCV解码显示)
  * 
  * 使用方法：
- *   ./network-stream-app -H <PC_IP地址> [-p 端口] [-t]
+ *   ./eth-camera-app -H <PC_IP地址> [选项]
  * 
  * 示例：
- *   ./network-stream-app -H 10.72.43.200 -p 5000        # UDP模式
- *   ./network-stream-app -H 10.72.43.200 -p 5000 -t     # TCP模式
+ *   ./eth-camera-app -H 10.72.43.200 -p 5000                 # UDP模式
+ *   ./eth-camera-app -H 10.72.43.200 -p 5000 -t              # TCP模式
+ *   ./eth-camera-app -H 10.72.43.200 --format yuyv           # 明确指定YUV422(YUYV)
+ *   ./eth-camera-app -H 10.72.43.200 --width 640 --height 480 # 修改分辨率
  */
 
 #include <stdio.h>
@@ -32,20 +38,23 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 
-#include "vpss_control.h"
 #include "vdma_control.h"
 
 /* ==================== 配置参数 ==================== */
 
-/* 视频参数 - 640x480@60fps */
-#define VIDEO_WIDTH     640
-#define VIDEO_HEIGHT    480
-#define BYTES_PER_PIXEL 4    /* RGBA格式：32位 */
-#define NUM_FRAMES      3    /* 三缓冲 */
-#define FRAME_SIZE      (VIDEO_WIDTH * VIDEO_HEIGHT * BYTES_PER_PIXEL)
+/* 默认视频参数（可通过命令行覆盖） */
+#define DEFAULT_VIDEO_WIDTH     640
+#define DEFAULT_VIDEO_HEIGHT    480
+#define DEFAULT_NUM_FRAMES      3    /* 三缓冲 */
+
+/* 像素格式定义（与PC端receive_stream.py一致） */
+typedef enum {
+    PIXFMT_RGBA = 0,  /* 4 bytes/pixel */
+    PIXFMT_YUYV = 1,  /* YUV422 packed, 2 bytes/pixel (YUYV) */
+} pixel_format_t;
 
 /* 帧缓冲物理地址 */
-#define FRAME_BUFFER_PHYS   0x20000000  /* 与设备树reserved_memory一致 (0x20000000-0x40000000) */
+#define DEFAULT_FRAME_BUFFER_PHYS   0x70000000  /* 与 petalinux_config/system-user.dtsi 保持一致 */
 
 /* 默认网络参数 */
 #define DEFAULT_PORT        5000
@@ -70,7 +79,7 @@ typedef struct __attribute__((packed)) {
     uint32_t frame_num;     /* 帧编号 */
     uint32_t width;         /* 图像宽度 */
     uint32_t height;        /* 图像高度 */
-    uint32_t format;        /* 像素格式: 0=RGBA */
+    uint32_t format;        /* 像素格式: 0=RGBA, 1=YUYV(YUV422) */
     uint32_t frame_size;    /* 帧数据大小 */
     uint32_t timestamp_sec; /* 时间戳（秒） */
     uint32_t timestamp_usec;/* 时间戳（微秒） */
@@ -80,7 +89,6 @@ typedef struct __attribute__((packed)) {
 
 /* ==================== 全局变量 ==================== */
 
-static vpss_control_t vpss;
 static vdma_control_t vdma;
 static volatile int running = 1;
 static int sock_fd = -1;
@@ -93,6 +101,31 @@ static int debug_mode = 0;  /* 调试模式：打印更多信息 */
 static int force_send = 0;  /* 强制发送模式：忽略帧变化检测 */
 static int diag_only = 0;   /* 仅诊断模式：不进行网络传输 */
 static char save_file[256] = "";  /* 保存帧数据到文件 */
+
+/* 视频参数（运行时） */
+static int video_width = DEFAULT_VIDEO_WIDTH;
+static int video_height = DEFAULT_VIDEO_HEIGHT;
+static int num_frames = DEFAULT_NUM_FRAMES;
+static pixel_format_t pixel_format = PIXFMT_YUYV;
+static uint32_t frame_buffer_phys = DEFAULT_FRAME_BUFFER_PHYS;
+
+static int bytes_per_pixel_from_format(pixel_format_t fmt)
+{
+    switch (fmt) {
+        case PIXFMT_RGBA: return 4;
+        case PIXFMT_YUYV: return 2;
+        default: return 2;
+    }
+}
+
+static const char* format_name(pixel_format_t fmt)
+{
+    switch (fmt) {
+        case PIXFMT_RGBA: return "RGBA";
+        case PIXFMT_YUYV: return "YUYV(YUV422)";
+        default: return "UNKNOWN";
+    }
+}
 
 /* ==================== 信号处理 ==================== */
 
@@ -199,15 +232,17 @@ int send_frame_header(int sock, uint32_t frame_num)
 {
     frame_header_t header;
     struct timespec ts;
+    const int bytes_per_pixel = bytes_per_pixel_from_format(pixel_format);
+    const uint32_t frame_size = (uint32_t)video_width * (uint32_t)video_height * (uint32_t)bytes_per_pixel;
     
     clock_gettime(CLOCK_REALTIME, &ts);
     
     header.magic = htonl(FRAME_MAGIC);
     header.frame_num = htonl(frame_num);
-    header.width = htonl(VIDEO_WIDTH);
-    header.height = htonl(VIDEO_HEIGHT);
-    header.format = htonl(0);  /* RGBA */
-    header.frame_size = htonl(FRAME_SIZE);
+    header.width = htonl(video_width);
+    header.height = htonl(video_height);
+    header.format = htonl((uint32_t)pixel_format);
+    header.frame_size = htonl(frame_size);
     header.timestamp_sec = htonl(ts.tv_sec);
     header.timestamp_usec = htonl(ts.tv_nsec / 1000);
     
@@ -379,73 +414,7 @@ void dump_vdma_registers(vdma_control_t *vdma)
     printf("╚══════════════════════════════════════════════════════════════╝\n");
 }
 
-/**
- * 打印VPSS完整寄存器状态
- */
-void dump_vpss_registers(vpss_control_t *vpss)
-{
-    if (!vpss || !vpss->base_addr) {
-        printf("VPSS 未初始化\n");
-        return;
-    }
-    
-    volatile uint32_t *base = (volatile uint32_t*)vpss->base_addr;
-    
-    printf("\n");
-    printf("╔══════════════════════════════════════════════════════════════╗\n");
-    printf("║                    VPSS 完整寄存器转储                        ║\n");
-    printf("╠══════════════════════════════════════════════════════════════╣\n");
-    
-    /* 基本控制寄存器 */
-    uint32_t ctrl = base[0x00/4];
-    uint32_t gie = base[0x04/4];
-    uint32_t ier = base[0x08/4];
-    uint32_t isr = base[0x0C/4];
-    uint32_t version = base[0x10/4];
-    
-    printf("║ 基本控制寄存器:                                              ║\n");
-    printf("║   [0x00] Control:     0x%08X                             ║\n", ctrl);
-    printf("║   [0x04] GIE:         0x%08X                             ║\n", gie);
-    printf("║   [0x08] IER:         0x%08X                             ║\n", ier);
-    printf("║   [0x0C] ISR:         0x%08X                             ║\n", isr);
-    printf("║   [0x10] Version:     0x%08X                             ║\n", version);
-    
-    /* Control 位分析 */
-    printf("║                                                              ║\n");
-    printf("║ Control 位分析:                                              ║\n");
-    printf("║   - ap_start:         %d                                     ║\n", (ctrl >> 0) & 1);
-    printf("║   - ap_done:          %d                                     ║\n", (ctrl >> 1) & 1);
-    printf("║   - ap_idle:          %d                                     ║\n", (ctrl >> 2) & 1);
-    printf("║   - ap_ready:         %d                                     ║\n", (ctrl >> 3) & 1);
-    printf("║   - auto_restart:     %d                                     ║\n", (ctrl >> 7) & 1);
-    
-    /* 扩展寄存器 - 可能包含配置参数 */
-    printf("║                                                              ║\n");
-    printf("║ 扩展寄存器 (0x20-0x7C):                                      ║\n");
-    for (int i = 0x20; i < 0x80; i += 0x10) {
-        printf("║   [0x%02X]: 0x%08X  [0x%02X]: 0x%08X  [0x%02X]: 0x%08X  [0x%02X]: 0x%08X ║\n",
-               i, base[i/4], i+4, base[(i+4)/4], i+8, base[(i+8)/4], i+12, base[(i+12)/4]);
-    }
-    
-    /* 诊断 */
-    printf("║                                                              ║\n");
-    printf("║ 诊断结果:                                                    ║\n");
-    if (isr != 0) {
-        printf("║   ❌ ISR有错误标志: 0x%08X                               ║\n", isr);
-    }
-    if (version == 0) {
-        printf("║   ⚠ 版本号为0，可能不是标准VPSS IP                         ║\n");
-    }
-    if ((ctrl & 0x01) && (ctrl & 0x04)) {
-        printf("║   ✓ VPSS已启动且处于Idle状态                                ║\n");
-    } else if (ctrl & 0x01) {
-        printf("║   ✓ VPSS已启动，正在处理                                    ║\n");
-    } else {
-        printf("║   ❌ VPSS未启动                                              ║\n");
-    }
-    
-    printf("╚══════════════════════════════════════════════════════════════╝\n");
-}
+/* 新链路默认不再依赖VPSS，所以这里移除了VPSS寄存器转储。 */
 
 /**
  * 详细检查帧缓冲区内容
@@ -477,8 +446,9 @@ void check_frame_buffer(vdma_control_t *vdma)
         printf("├──────────────────────────────────────────────────────────────┤\n");
         
         /* 多个位置的数据 */
-        int offsets[] = {0, vdma->width * 4, vdma->width * 4 * 100, 
-                         frame_size / 2, vdma->width * 4 * 400, frame_size - vdma->width * 4};
+        int line_bytes = vdma->width * vdma->bytes_per_pixel;
+        int offsets[] = {0, line_bytes, line_bytes * 100,
+                         frame_size / 2, line_bytes * 400, frame_size - line_bytes};
         const char *names[] = {"行0 (开头)", "行1      ", "行100    ", 
                                "行240(中间)", "行400    ", "最后一行 "};
         
@@ -492,18 +462,37 @@ void check_frame_buffer(vdma_control_t *vdma)
                 printf("%02X ", frame_start[offset + i]);
             }
             printf("│\n");
-            
-            /* 按ARGB {A,R,G,B} 解析 */
-            printf("│   ARGB: ");
-            for (int i = 0; i < 4; i++) {
-                int idx = offset + i * 4;
-                if (idx + 3 < frame_size) {
-                    printf("A%d,R%d,G%d,B%d ", 
-                           frame_start[idx], frame_start[idx+1], 
-                           frame_start[idx+2], frame_start[idx+3]);
+
+            if (vdma->bytes_per_pixel == 2) {
+                /*
+                 * 认为是YUV422 packed (常见为YUYV):
+                 * 两个像素4字节: Y0 U0 Y1 V0
+                 */
+                printf("│   YUYV(2px=4B): ");
+                for (int i = 0; i < 4; i++) {
+                    int idx = offset + i * 4;
+                    if (idx + 3 < frame_size) {
+                        uint8_t y0 = frame_start[idx + 0];
+                        uint8_t u0 = frame_start[idx + 1];
+                        uint8_t y1 = frame_start[idx + 2];
+                        uint8_t v0 = frame_start[idx + 3];
+                        printf("[Y0=%3u U=%3u Y1=%3u V=%3u] ", y0, u0, y1, v0);
+                    }
                 }
+                printf("│\n");
+            } else if (vdma->bytes_per_pixel == 4) {
+                /* 旧路径：按ARGB {A,R,G,B} 解析 */
+                printf("│   ARGB: ");
+                for (int i = 0; i < 4; i++) {
+                    int idx = offset + i * 4;
+                    if (idx + 3 < frame_size) {
+                        printf("A%d,R%d,G%d,B%d ",
+                               frame_start[idx], frame_start[idx+1],
+                               frame_start[idx+2], frame_start[idx+3]);
+                    }
+                }
+                printf("│\n");
             }
-            printf("│\n");
         }
         
         /* 统计分析 */
@@ -523,14 +512,28 @@ void check_frame_buffer(vdma_control_t *vdma)
                count_ff, frame_size, 100.0 * count_ff / frame_size);
         printf("│   0x00 字节: %7d / %d (%.1f%%)                        │\n", 
                count_00, frame_size, 100.0 * count_00 / frame_size);
-        printf("│   通道0均值: %6.1f (如果ARGB格式，这是Alpha)              │\n", 
-               (float)byte_sum[0] / pixels);
-        printf("│   通道1均值: %6.1f (如果ARGB格式，这是Red)                │\n", 
-               (float)byte_sum[1] / pixels);
-        printf("│   通道2均值: %6.1f (如果ARGB格式，这是Green)              │\n", 
-               (float)byte_sum[2] / pixels);
-        printf("│   通道3均值: %6.1f (如果ARGB格式，这是Blue)               │\n", 
-               (float)byte_sum[3] / pixels);
+        if (vdma->bytes_per_pixel == 2) {
+            /* 粗略统计：按字节位置的均值（便于判断是否有变化） */
+            int pairs = pixels / 2;
+            if (pairs <= 0) pairs = 1;
+            printf("│   Byte0均值: %6.1f (常见为Y0)                             │\n",
+                   (float)byte_sum[0] / pairs);
+            printf("│   Byte1均值: %6.1f (常见为U0)                             │\n",
+                   (float)byte_sum[1] / pairs);
+            printf("│   Byte2均值: %6.1f (常见为Y1)                             │\n",
+                   (float)byte_sum[2] / pairs);
+            printf("│   Byte3均值: %6.1f (常见为V0)                             │\n",
+                   (float)byte_sum[3] / pairs);
+        } else {
+            printf("│   通道0均值: %6.1f (如果ARGB格式，这是Alpha)              │\n",
+                   (float)byte_sum[0] / pixels);
+            printf("│   通道1均值: %6.1f (如果ARGB格式，这是Red)                │\n",
+                   (float)byte_sum[1] / pixels);
+            printf("│   通道2均值: %6.1f (如果ARGB格式，这是Green)              │\n",
+                   (float)byte_sum[2] / pixels);
+            printf("│   通道3均值: %6.1f (如果ARGB格式，这是Blue)               │\n",
+                   (float)byte_sum[3] / pixels);
+        }
         
         /* 判断数据状态 */
         printf("├──────────────────────────────────────────────────────────────┤\n");
@@ -588,14 +591,17 @@ int main_loop()
     int last_vdma_frame = -1;
     int skipped_frames = 0;  /* 跳过的帧数（帧号未变化） */
     struct timespec start_time, current_time, last_status_time;
+    const int bytes_per_pixel = bytes_per_pixel_from_format(pixel_format);
+    const int frame_size = video_width * video_height * bytes_per_pixel;
     clock_gettime(CLOCK_MONOTONIC, &start_time);
     last_status_time = start_time;
     
     printf("\n开始网络视频流传输...\n");
-    printf("分辨率: %dx%d@%dfps (RGBA格式)\n", VIDEO_WIDTH, VIDEO_HEIGHT, TARGET_FPS);
+    printf("分辨率: %dx%d@%dfps (%s)\n", video_width, video_height, TARGET_FPS, format_name(pixel_format));
     printf("协议: %s, 目标: %s:%d\n", use_tcp ? "TCP" : "UDP", target_host, target_port);
-    printf("帧大小: %d bytes (%.2f MB/s)\n", FRAME_SIZE, 
-           (float)FRAME_SIZE * TARGET_FPS / 1024 / 1024);
+    printf("帧缓冲物理地址: 0x%08X\n", frame_buffer_phys);
+    printf("帧大小: %d bytes (%.2f MB/s)\n", frame_size, 
+           (float)frame_size * TARGET_FPS / 1024 / 1024);
     printf("调试模式: %s\n", debug_mode ? "开启" : "关闭");
     printf("强制发送: %s\n", force_send ? "开启（忽略帧变化检测）" : "关闭");
     printf("按Ctrl+C退出\n\n");
@@ -620,7 +626,7 @@ int main_loop()
         int current_vdma_frame = vdma_get_current_frame(&vdma);
         
         /* 选择一个不同的帧读取 */
-        int read_frame = (current_vdma_frame + 1) % NUM_FRAMES;
+        int read_frame = (current_vdma_frame + 1) % num_frames;
         
         /* 如果帧没有变化，根据模式决定是否跳过 */
         if (current_vdma_frame == last_vdma_frame && frame_count > 0) {
@@ -642,40 +648,40 @@ int main_loop()
         last_vdma_frame = current_vdma_frame;
         
         /* 获取帧数据 */
-        const uint8_t *rgba_frame = (uint8_t*)vdma.frame_buffer + (read_frame * FRAME_SIZE);
+        const uint8_t *frame = (uint8_t*)vdma.frame_buffer + (read_frame * frame_size);
         
         /* 调试：第一帧时打印帧数据信息 */
         if (debug_mode && frame_count == 0) {
             printf("[DEBUG] 发送第一帧，读取帧缓冲 #%d (地址偏移: 0x%X)\n", 
-                   read_frame, read_frame * FRAME_SIZE);
+                   read_frame, read_frame * frame_size);
             printf("[DEBUG] 帧数据 开头16字节: ");
             for (int i = 0; i < 16; i++) {
-                printf("%02X ", rgba_frame[i]);
+                printf("%02X ", frame[i]);
             }
             printf("\n");
             
             /* 检查中间部分 */
-            int mid_offset = FRAME_SIZE / 2;
+            int mid_offset = frame_size / 2;
             printf("[DEBUG] 帧数据 中间16字节: ");
             for (int i = 0; i < 16; i++) {
-                printf("%02X ", rgba_frame[mid_offset + i]);
+                printf("%02X ", frame[mid_offset + i]);
             }
             printf("\n");
             
             /* 检查末尾部分 */
-            int end_offset = FRAME_SIZE - 16;
+            int end_offset = frame_size - 16;
             printf("[DEBUG] 帧数据 末尾16字节: ");
             for (int i = 0; i < 16; i++) {
-                printf("%02X ", rgba_frame[end_offset + i]);
+                printf("%02X ", frame[end_offset + i]);
             }
             printf("\n");
             
             /* 统计非FF字节比例 */
             int non_ff_count = 0;
-            for (int i = 0; i < FRAME_SIZE; i += 256) {
-                if (rgba_frame[i] != 0xFF) non_ff_count++;
+            for (int i = 0; i < frame_size; i += 256) {
+                if (frame[i] != 0xFF) non_ff_count++;
             }
-            int samples = FRAME_SIZE / 256;
+            int samples = frame_size / 256;
             printf("[DEBUG] 非0xFF数据比例: %d/%d (%.1f%%)\n", 
                    non_ff_count, samples, 100.0 * non_ff_count / samples);
         }
@@ -683,9 +689,9 @@ int main_loop()
         /* 发送帧 */
         int ret;
         if (use_tcp) {
-            ret = send_frame_tcp(sock_fd, rgba_frame, FRAME_SIZE, frame_count);
+            ret = send_frame_tcp(sock_fd, frame, frame_size, frame_count);
         } else {
-            ret = send_frame_udp(sock_fd, rgba_frame, FRAME_SIZE, frame_count);
+            ret = send_frame_udp(sock_fd, frame, frame_size, frame_count);
         }
         
         if (ret < 0) {
@@ -704,7 +710,7 @@ int main_loop()
             double elapsed = (current_time.tv_sec - start_time.tv_sec) + 
                            (current_time.tv_nsec - start_time.tv_nsec) / 1e9;
             double fps = frame_count / elapsed;
-            double bitrate = (double)FRAME_SIZE * frame_count * 8 / elapsed / 1e6;
+            double bitrate = (double)frame_size * frame_count * 8 / elapsed / 1e6;
             
             printf("已发送 %d 帧 (FPS: %.1f, 码率: %.1f Mbps", 
                    frame_count, fps, bitrate);
@@ -734,6 +740,11 @@ void print_usage(const char *prog)
     printf("  -p, --port <端口>    目标端口 (默认: %d)\n", DEFAULT_PORT);
     printf("  -t, --tcp            使用TCP协议 (默认: UDP)\n");
     printf("  -f, --force          强制发送模式，忽略帧变化检测\n");
+    printf("\n视频参数选项:\n");
+    printf("      --width <像素>   图像宽度 (默认: %d)\n", DEFAULT_VIDEO_WIDTH);
+    printf("      --height <像素>  图像高度 (默认: %d)\n", DEFAULT_VIDEO_HEIGHT);
+    printf("      --format <fmt>   像素格式: yuyv(默认), rgba\n");
+    printf("      --fb-phys <hex>  帧缓冲物理地址 (默认: 0x%08X)\n", DEFAULT_FRAME_BUFFER_PHYS);
     printf("\n诊断选项:\n");
     printf("  -d, --debug          调试模式，打印详细诊断信息\n");
     printf("  -D, --diag           仅诊断模式，不进行网络传输\n");
@@ -765,6 +776,10 @@ int main(int argc, char **argv)
         {"force", no_argument,       0, 'f'},
         {"diag",  no_argument,       0, 'D'},
         {"save",  required_argument, 0, 's'},
+        {"width", required_argument, 0,  1 },
+        {"height",required_argument, 0,  2 },
+        {"format",required_argument, 0,  3 },
+        {"fb-phys",required_argument,0,  4 },
         {"help",  no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
@@ -796,6 +811,25 @@ int main(int argc, char **argv)
                 diag_only = 1;   /* 保存文件也进入诊断模式 */
                 debug_mode = 1;
                 break;
+            case 1:
+                video_width = atoi(optarg);
+                break;
+            case 2:
+                video_height = atoi(optarg);
+                break;
+            case 3:
+                if (strcmp(optarg, "yuyv") == 0 || strcmp(optarg, "yuv422") == 0) {
+                    pixel_format = PIXFMT_YUYV;
+                } else if (strcmp(optarg, "rgba") == 0) {
+                    pixel_format = PIXFMT_RGBA;
+                } else {
+                    fprintf(stderr, "不支持的format: %s (可选: yuyv, rgba)\n", optarg);
+                    return 1;
+                }
+                break;
+            case 4:
+                frame_buffer_phys = (uint32_t)strtoul(optarg, NULL, 0);
+                break;
             case 'h':
             case '?':
             default:
@@ -807,44 +841,34 @@ int main(int argc, char **argv)
     printf("========================================\n");
     printf("网络视频流传输应用\n");
     printf("Xilinx Zynq UltraScale+ MPSoC\n");
-    printf("IR Camera over Ethernet\n");
+    printf("CameraLink YUV422 over Ethernet\n");
     printf("========================================\n\n");
     
     /* 注册信号处理 */
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     
-    /* 初始化VPSS */
-    printf("[1/5] 初始化VPSS...\n");
-    if (vpss_init(&vpss, VIDEO_WIDTH, VIDEO_HEIGHT) < 0) {
-        fprintf(stderr, "VPSS初始化失败\n");
+    /* 初始化VDMA */
+    printf("[1/4] 初始化VDMA...\n");
+    if (video_width <= 0 || video_height <= 0) {
+        fprintf(stderr, "分辨率参数非法: %dx%d\n", video_width, video_height);
         ret = 1;
         goto cleanup;
     }
-    
-    /* 初始化VDMA */
-    printf("\n[2/5] 初始化VDMA...\n");
-    if (vdma_init(&vdma, VIDEO_WIDTH, VIDEO_HEIGHT, 
-                  BYTES_PER_PIXEL, NUM_FRAMES,
-                  FRAME_BUFFER_PHYS) < 0) {
+    num_frames = DEFAULT_NUM_FRAMES;
+    const int bytes_per_pixel = bytes_per_pixel_from_format(pixel_format);
+    if (vdma_init(&vdma, video_width, video_height, 
+                  bytes_per_pixel, num_frames,
+                  frame_buffer_phys) < 0) {
         fprintf(stderr, "VDMA初始化失败\n");
         ret = 1;
         goto cleanup;
     }
     
     /* 启动VDMA */
-    printf("\n[3/5] 启动VDMA...\n");
+    printf("\n[2/4] 启动VDMA...\n");
     if (vdma_start(&vdma) < 0) {
         fprintf(stderr, "VDMA启动失败\n");
-        ret = 1;
-        goto cleanup;
-    }
-    
-    /* 启动VPSS */
-    printf("\n[4/5] 启动VPSS...\n");
-    usleep(10000);
-    if (vpss_start(&vpss) < 0) {
-        fprintf(stderr, "VPSS启动失败\n");
         ret = 1;
         goto cleanup;
     }
@@ -855,7 +879,6 @@ int main(int argc, char **argv)
     
     /* 诊断模式：打印详细寄存器信息 */
     if (debug_mode) {
-        dump_vpss_registers(&vpss);
         dump_vdma_registers(&vdma);
         check_frame_buffer(&vdma);
     }
@@ -875,7 +898,7 @@ int main(int argc, char **argv)
     }
     
     /* 初始化网络 */
-    printf("\n[5/5] 初始化网络连接...\n");
+    printf("\n[3/4] 初始化网络连接...\n");
     if (use_tcp) {
         sock_fd = init_tcp_socket(target_host, target_port);
     } else {
@@ -889,6 +912,7 @@ int main(int argc, char **argv)
     }
     
     /* 主循环 */
+    printf("\n[4/4] 开始发送...\n");
     ret = main_loop();
     
 cleanup:
@@ -898,7 +922,6 @@ cleanup:
         close(sock_fd);
     }
     
-    vpss_cleanup(&vpss);
     vdma_cleanup(&vdma);
     
     printf("程序退出\n");

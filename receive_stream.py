@@ -4,7 +4,7 @@
 网络视频流接收程序（PC端）
 
 功能：
-- 接收来自ZynqMP开发板的RGBA视频流
+- 接收来自ZynqMP开发板的视频流（默认YUV422/YUYV，兼容RGBA）
 - 支持UDP和TCP两种协议
 - 实时显示视频画面
 - 可选保存为视频文件
@@ -47,14 +47,12 @@ FRAME_HEADER_FORMAT = '>IIIIIIII'  # 大端序，8个uint32
 FRAME_HEADER_SIZE = struct.calcsize(FRAME_HEADER_FORMAT)
 FRAME_MAGIC = 0x56494446  # "VIDF"
 
-# 视频参数
-VIDEO_WIDTH = 640
-VIDEO_HEIGHT = 480
-BYTES_PER_PIXEL = 4
-FRAME_SIZE = VIDEO_WIDTH * VIDEO_HEIGHT * BYTES_PER_PIXEL
-
 # UDP分片大小
 UDP_CHUNK_SIZE = 1400
+
+# 像素格式（与发送端 eth-camera-app 一致）
+PIXFMT_RGBA = 0
+PIXFMT_YUYV = 1  # YUV422 packed (YUYV)
 
 
 class FrameHeader:
@@ -77,12 +75,17 @@ class FrameHeader:
 class VideoReceiver:
     """视频流接收器"""
     
-    def __init__(self, port, use_tcp=False, output_file=None, debug=False, color_mode='rgba'):
+    def __init__(self, port, use_tcp=False, output_file=None, debug=False, color_mode='auto', yuv_order='yuyv'):
         self.port = port
         self.use_tcp = use_tcp
         self.output_file = output_file
         self.debug = debug
-        self.color_mode = color_mode  # 颜色模式: rgba, bgra, rgb, gray
+        # 解码模式:
+        # - auto: 根据帧头header.format自动选择（本项目默认YUV422/YUYV）
+        # - yuyv/uyvy: 强制按对应YUV422字节序解码
+        # - rgba/bgra/argb/rgb/gray/gray2: 兼容旧RGBA链路
+        self.color_mode = color_mode
+        self.yuv_order = yuv_order
         
         self.running = False
         self.sock = None
@@ -102,6 +105,8 @@ class VideoReceiver:
         
         # 视频写入器
         self.video_writer = None
+        self._writer_initialized = False
+        self._last_header = None
     
     def start(self):
         """启动接收器"""
@@ -156,49 +161,24 @@ class VideoReceiver:
         while self.running:
             try:
                 if self.use_tcp:
-                    frame = self._receive_frame_tcp()
+                    header, frame = self._receive_frame_tcp()
                 else:
-                    frame = self._receive_frame_udp()
+                    header, frame = self._receive_frame_udp()
                 
-                if frame is not None:
+                if header is not None and frame is not None:
+                    self._last_header = header
                     # 转换并放入队列
                     if HAS_OPENCV:
-                        rgba = np.frombuffer(frame, dtype=np.uint8).reshape(
-                            (VIDEO_HEIGHT, VIDEO_WIDTH, 4))
-                        
-                        # 根据格式选择转换方式
-                        # 数据格式说明:
-                        #   rgba: 字节顺序 R,G,B,A
-                        #   bgra: 字节顺序 B,G,R,A
-                        #   argb: 字节顺序 A,R,G,B (IR相机格式 {FF,RR,GG,BB})
-                        #   rgb:  忽略第4字节，按R,G,B处理
-                        #   gray: 只取第一个通道作为灰度
-                        if self.color_mode == 'rgba':
-                            bgr = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
-                        elif self.color_mode == 'bgra':
-                            bgr = cv2.cvtColor(rgba, cv2.COLOR_BGRA2BGR)
-                        elif self.color_mode == 'argb':
-                            # ARGB格式: {A,R,G,B} -> 需要重排为 {R,G,B,A} 再转BGR
-                            # 字节0=A, 字节1=R, 字节2=G, 字节3=B
-                            argb = rgba  # 实际是ARGB数据
-                            # 重排通道: A,R,G,B -> B,G,R (忽略A)
-                            bgr = np.zeros((VIDEO_HEIGHT, VIDEO_WIDTH, 3), dtype=np.uint8)
-                            bgr[:,:,0] = argb[:,:,3]  # B
-                            bgr[:,:,1] = argb[:,:,2]  # G
-                            bgr[:,:,2] = argb[:,:,1]  # R
-                        elif self.color_mode == 'rgb':
-                            # 忽略Alpha通道，直接RGB->BGR
-                            bgr = cv2.cvtColor(rgba[:,:,:3], cv2.COLOR_RGB2BGR)
-                        elif self.color_mode == 'gray':
-                            # 只取第一个通道作为灰度图
-                            gray = rgba[:,:,0]
-                            bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-                        elif self.color_mode == 'gray2':
-                            # 取第二个通道作为灰度图 (如果是ARGB，这是R通道)
-                            gray = rgba[:,:,1]
-                            bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-                        else:
-                            bgr = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
+                        bgr = self._decode_frame_to_bgr(header, frame)
+
+                        # 如果需要保存视频：首次拿到真实分辨率后再初始化writer
+                        if self.output_file and (not self._writer_initialized):
+                            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+                            self.video_writer = cv2.VideoWriter(
+                                self.output_file, fourcc, 60, (header.width, header.height)
+                            )
+                            self._writer_initialized = True
+                            print(f"视频将保存到: {self.output_file} (分辨率: {header.width}x{header.height})")
                         
                         try:
                             self.frame_queue.put_nowait(bgr)
@@ -217,7 +197,7 @@ class VideoReceiver:
         print("接收线程退出")
     
     def _receive_frame_udp(self):
-        """接收UDP帧"""
+        """接收UDP帧 -> (header, frame_bytes)"""
         # 接收第一个数据包（应该是帧头）
         # UDP recvfrom会接收整个数据包，不管请求多少字节
         data, addr = self.sock.recvfrom(65535)
@@ -226,7 +206,7 @@ class VideoReceiver:
         if len(data) < FRAME_HEADER_SIZE:
             if self.debug:
                 print(f"[DEBUG] 收到数据包太小: {len(data)} bytes")
-            return None
+            return None, None
         
         # 尝试解析帧头
         header = FrameHeader(data[:FRAME_HEADER_SIZE])
@@ -236,7 +216,7 @@ class VideoReceiver:
                 # 只打印前10次无效帧头
                 print(f"[DEBUG] 无效帧头 #{self.invalid_headers}, magic=0x{header.magic:08X} (期望0x{FRAME_MAGIC:08X})")
                 print(f"[DEBUG] 数据包前32字节: {data[:32].hex()}")
-            return None
+            return None, None
         
         if self.debug and self.frame_count == 0:
             print(f"[DEBUG] 收到第一个有效帧头: 帧号={header.frame_num}, 大小={header.frame_size}")
@@ -265,23 +245,23 @@ class VideoReceiver:
                 self.partial_frames += 1
                 if self.debug:
                     print(f"[DEBUG] 帧 #{header.frame_num} 不完整: 收到 {len(frame_data)}/{header.frame_size} bytes")
-                return None  # 帧不完整
+                return None, None  # 帧不完整
         
-        return bytes(frame_data[:header.frame_size])
+        return header, bytes(frame_data[:header.frame_size])
     
     def _receive_frame_tcp(self):
-        """接收TCP帧"""
+        """接收TCP帧 -> (header, frame_bytes)"""
         if not self.client_sock:
-            return None
+            return None, None
         
         # 接收帧头
         data = self._recv_exact(self.client_sock, FRAME_HEADER_SIZE)
         if not data:
-            return None
+            return None, None
         
         header = FrameHeader(data)
         if not header.is_valid():
-            return None
+            return None, None
         
         # 检测丢帧
         if self.last_frame_num >= 0:
@@ -294,7 +274,63 @@ class VideoReceiver:
         frame_data = self._recv_exact(self.client_sock, header.frame_size)
         if frame_data:
             self.bytes_received += len(frame_data)
-        return frame_data
+        return header, frame_data
+
+    def _decode_frame_to_bgr(self, header, frame_bytes):
+        """
+        将一帧原始数据解码为OpenCV可显示的BGR图像。
+        - 优先使用header.format自动判断
+        - color_mode可强制覆盖（例如强制uyvy）
+        """
+        w, h = int(header.width), int(header.height)
+        forced = (self.color_mode or 'auto').lower()
+
+        # ---------- YUV422 (YUYV/UYVY) ----------
+        # auto：严格按帧头决定；只有用户显式指定yuyv/uyvy才强制覆盖
+        is_yuv_forced = forced in ('yuyv', 'uyvy', 'yuv', 'yuv422')
+        is_yuv = (header.format == PIXFMT_YUYV) if forced == 'auto' else is_yuv_forced
+        if is_yuv:
+            expected = w * h * 2
+            if len(frame_bytes) < expected:
+                raise ValueError(f"帧数据不足(YUV422): got={len(frame_bytes)}, expected>={expected}")
+            yuv = np.frombuffer(frame_bytes[:expected], dtype=np.uint8).reshape((h, w, 2))
+
+            order = self.yuv_order.lower()
+            if forced == 'uyvy':
+                order = 'uyvy'
+            if forced == 'yuyv':
+                order = 'yuyv'
+
+            if order == 'uyvy':
+                return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_UYVY)
+            return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_YUY2)
+
+        # ---------- RGBA/ARGB等（兼容旧链路） ----------
+        expected = w * h * 4
+        if len(frame_bytes) < expected:
+            raise ValueError(f"帧数据不足(RGBA): got={len(frame_bytes)}, expected>={expected}")
+        rgba = np.frombuffer(frame_bytes[:expected], dtype=np.uint8).reshape((h, w, 4))
+
+        if forced == 'bgra':
+            return cv2.cvtColor(rgba, cv2.COLOR_BGRA2BGR)
+        if forced == 'argb':
+            argb = rgba
+            bgr = np.zeros((h, w, 3), dtype=np.uint8)
+            bgr[:, :, 0] = argb[:, :, 3]  # B
+            bgr[:, :, 1] = argb[:, :, 2]  # G
+            bgr[:, :, 2] = argb[:, :, 1]  # R
+            return bgr
+        if forced == 'rgb':
+            return cv2.cvtColor(rgba[:, :, :3], cv2.COLOR_RGB2BGR)
+        if forced == 'gray':
+            gray = rgba[:, :, 0]
+            return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        if forced == 'gray2':
+            gray = rgba[:, :, 1]
+            return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+        # 默认按RGBA
+        return cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
     
     def _recv_exact(self, sock, size):
         """精确接收指定字节数"""
@@ -428,9 +464,12 @@ def main():
                         help='输出视频文件 (如: output.avi)')
     parser.add_argument('-d', '--debug', action='store_true',
                         help='调试模式，打印详细信息')
-    parser.add_argument('-c', '--color', type=str, default='rgba',
-                        choices=['rgba', 'bgra', 'argb', 'rgb', 'gray', 'gray2'],
-                        help='颜色模式: rgba(默认), bgra, argb({FF,RR,GG,BB}), rgb, gray, gray2')
+    parser.add_argument('-c', '--color', type=str, default='auto',
+                        choices=['auto', 'yuyv', 'uyvy', 'rgba', 'bgra', 'argb', 'rgb', 'gray', 'gray2'],
+                        help='解码模式: auto(默认,按帧头自动/优先YUV422), yuyv, uyvy, rgba, bgra, argb({FF,RR,GG,BB}), rgb, gray, gray2')
+    parser.add_argument('--yuv-order', type=str, default='yuyv',
+                        choices=['yuyv', 'uyvy'],
+                        help='当输入是YUV422时的字节序 (默认: yuyv)')
     
     args = parser.parse_args()
     
@@ -442,17 +481,11 @@ def main():
     print(f"输出: {args.output if args.output else '无'}")
     print(f"调试: {'开启' if args.debug else '关闭'}")
     print(f"颜色: {args.color}")
+    print(f"YUV顺序: {args.yuv_order}")
     print(f"OpenCV: {'已安装' if HAS_OPENCV else '未安装'}")
     print("=" * 50 + "\n")
     
-    receiver = VideoReceiver(args.port, args.tcp, args.output, args.debug, args.color)
-    
-    # 如果需要保存视频
-    if args.output and HAS_OPENCV:
-        fourcc = cv2.VideoWriter_fourcc(*'XVID')
-        receiver.video_writer = cv2.VideoWriter(
-            args.output, fourcc, 60, (VIDEO_WIDTH, VIDEO_HEIGHT))
-        print(f"视频将保存到: {args.output}")
+    receiver = VideoReceiver(args.port, args.tcp, args.output, args.debug, args.color, args.yuv_order)
     
     receiver.start()
     print("程序退出")

@@ -16,7 +16,10 @@
 
 # 编译器设置（如果环境变量未定义，使用默认值）
 CC ?= gcc
-CFLAGS ?= -Wall -O2 -std=c99
+# 说明：
+# - clock_gettime/usleep 等POSIX接口在部分编译器/标准库下需要显式开启特性宏
+# - 这里通过编译选项统一开启，避免各文件里重复写宏定义
+CFLAGS ?= -Wall -O2 -std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
 LDFLAGS ?=
 
 # 目标程序名

@@ -161,7 +161,27 @@ int vdma_init(vdma_control_t *vdma, int width, int height,
     
     /* 配置VDMA参数 */
     printf("配置VDMA参数...\n");
-    uint32_t hsize = width * bytes_per_pixel;
+    uint32_t hsize = (uint32_t)width * (uint32_t)bytes_per_pixel;
+
+    /*
+     * 重要：
+     * 你的Vivado链路已经是 32-bit AXI4-Stream -> VDMA，
+     * 所以 HSize(每行字节数) 通常需要至少 4字节对齐（也就是32-bit对齐）。
+     *
+     * 对于YUV422(YUYV)：
+     * - bytes_per_pixel = 2
+     * - width必须是偶数（否则一行字节数=width*2无法被4整除）
+     */
+    if ((hsize % 4) != 0) {
+        fprintf(stderr,
+                "错误: 每行字节数(HSize=%u)不是4字节对齐。\n"
+                "  width=%d, bytes_per_pixel=%d\n"
+                "  你的VDMA输入是32-bit，建议让 width*bytes_per_pixel 能被4整除。\n"
+                "  如果是YUV422(YUYV,2Bpp)，请确保 width 为偶数。\n",
+                hsize, width, bytes_per_pixel);
+        return -1;
+    }
+
     uint32_t stride = hsize;
     
     *(volatile uint32_t*)(vdma->base_addr + VDMA_S2MM_HSIZE) = hsize;

@@ -20,10 +20,10 @@
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        ZynqMP 开发板                                 │
 │                                                                     │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌───────────────┐  │
-│  │ Camera   │───▶│  VPSS    │───▶│  VDMA    │───▶│ network-stream│  │
-│  │ (PL端)   │    │(颜色转换)│    │(写入DDR) │    │  -app (PS端)  │  │
-│  └──────────┘    └──────────┘    └──────────┘    └───────┬───────┘  │
+│  ┌──────────┐                      ┌──────────┐    ┌───────────────┐  │
+│  │ Camera   │─────────────────────▶│  VDMA    │───▶│ eth-camera-app │  │
+│  │ (PL端)   │  (YUV422->AXIS32)    │(写入DDR) │    │  (PS端)       │  │
+│  └──────────┘                      └──────────┘    └───────┬───────┘  │
 │                                                          │          │
 │                                                          ▼          │
 │                                                    ┌──────────┐     │
@@ -98,7 +98,7 @@ python -c "import cv2; import numpy; print('安装成功！OpenCV版本:', cv2._
 **不需要安装OpenCV！** 网络传输程序是纯C代码，只依赖：
 - 标准C库
 - Linux socket API
-- VPSS/VDMA控制库（项目自带）
+- VDMA控制库（项目自带）
 
 **PetaLinux配置要求：**
 - 不需要勾选OpenCV
@@ -300,7 +300,7 @@ python receive_stream.py -p 5000 -o output.avi
 sudo ./run_network_stream.sh 10.72.43.200
 
 # 或直接运行程序
-sudo ./network-stream-app -H 10.72.43.200 -p 5000
+sudo ./eth-camera-app -H 10.72.43.200 -p 5000
 ```
 
 **看到以下输出表示成功：**
@@ -308,21 +308,19 @@ sudo ./network-stream-app -H 10.72.43.200 -p 5000
 ========================================
 网络视频流传输应用
 Xilinx Zynq UltraScale+ MPSoC
-IR Camera over Ethernet
+CameraLink YUV422 over Ethernet
 ========================================
 
-[1/5] 初始化VPSS...
-[2/5] 初始化VDMA...
-[3/5] 启动VDMA...
-[4/5] 启动VPSS...
-[5/5] 初始化网络连接...
+[1/4] 初始化VDMA...
+[2/4] 启动VDMA...
+[3/4] 初始化网络连接...
 创建UDP套接字，目标: 10.72.43.200:5000
 
 开始网络视频流传输...
-分辨率: 640x480@60fps (RGBA格式)
+分辨率: 640x480@60fps (YUV422/YUYV)
 协议: UDP, 目标: 10.72.43.200:5000
-已发送 60 帧 (FPS: 60.1, 码率: 590.2 Mbps)
-已发送 120 帧 (FPS: 60.0, 码率: 589.8 Mbps)
+已发送 60 帧 (FPS: 60.1, 码率: 295.1 Mbps)
+已发送 120 帧 (FPS: 60.0, 码率: 294.9 Mbps)
 ...
 ```
 
@@ -345,14 +343,20 @@ IR Camera over Ethernet
 | `-p, --port` | 监听端口 | `-p 5000` |
 | `-t, --tcp` | 使用TCP模式 | `-t` |
 | `-o, --output` | 保存为视频文件 | `-o video.avi` |
+| `-c, --color` | 解码模式（默认auto=优先YUV422） | `-c auto` / `-c uyvy` |
+| `--yuv-order` | YUV422字节序 | `--yuv-order yuyv` |
 
-### 开发板 network-stream-app
+### 开发板 eth-camera-app
 
 | 参数 | 说明 | 示例 |
 |------|------|------|
 | `-H, --host` | PC的IP地址 | `-H 10.72.43.200` |
 | `-p, --port` | 端口号 | `-p 5000` |
 | `-t, --tcp` | 使用TCP模式 | `-t` |
+| `--width` | 图像宽度 | `--width 640` |
+| `--height` | 图像高度 | `--height 480` |
+| `--format` | 像素格式 | `--format yuyv` |
+| `--fb-phys` | 帧缓冲物理地址 | `--fb-phys 0x70000000` |
 
 ---
 
@@ -446,7 +450,7 @@ pip install -i https://pypi.tuna.tsinghua.edu.cn/simple opencv-python numpy
 
 ### 问题5：开发板程序启动失败
 
-**错误：VPSS/VDMA初始化失败**
+**错误：VDMA初始化失败**
 
 这通常意味着硬件未正确配置。请检查：
 - 设备树是否正确
@@ -458,7 +462,7 @@ pip install -i https://pypi.tuna.tsinghua.edu.cn/simple opencv-python numpy
 ls /dev/uio*
 
 # 检查设备树
-cat /proc/device-tree/axi/vpss*/compatible
+cat /proc/device-tree/axi/*vdma*/compatible
 ```
 
 ---
@@ -494,11 +498,11 @@ cat /proc/device-tree/axi/vpss*/compatible
 
 | 项目 | 规格 |
 |------|------|
-| 视频格式 | RGBA 32-bit |
+| 视频格式 | YUV422 (YUYV) 16-bit/像素 |
 | 分辨率 | 640 × 480 |
 | 帧率 | 60 fps |
-| 单帧大小 | 1,228,800 bytes (1.17 MB) |
-| 理论带宽 | 73.7 MB/s ≈ 590 Mbps |
+| 单帧大小 | 614,400 bytes (0.59 MB) |
+| 理论带宽 | 36.9 MB/s ≈ 295 Mbps |
 | 推荐网络 | 千兆以太网 (1 Gbps) |
 | 协议选择 | UDP（低延迟）/ TCP（可靠）|
 
