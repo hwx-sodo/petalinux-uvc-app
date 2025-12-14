@@ -569,8 +569,10 @@ int main_loop()
     int skipped_frames = 0;  /* 跳过的帧数（帧号未变化） */
     struct timespec start_time, current_time, last_status_time;
     const int frame_size = video_width * video_height * BYTES_PER_PIXEL;
+    struct timespec last_frame_change_time;
     clock_gettime(CLOCK_MONOTONIC, &start_time);
     last_status_time = start_time;
+    last_frame_change_time = start_time;
     
     printf("\n开始网络视频流传输...\n");
     printf("分辨率: %dx%d@%dfps (YUV422/YUYV)\n", video_width, video_height, TARGET_FPS);
@@ -601,25 +603,53 @@ int main_loop()
         /* 获取VDMA当前写入的帧 */
         int current_vdma_frame = vdma_get_current_frame(&vdma);
         
-        /* 选择一个不同的帧读取 */
+        /*
+         * 选择一个不同的帧读取，尽量避免读写冲突。
+         * 如果VDMA“帧指针长期不变”，说明：
+         * - 可能VDMA没在多帧轮转（NUM_FSTORES=1等）
+         * - 或者软件读取帧号方式不匹配IP配置
+         * 此时继续读“+1”的缓冲很可能读到旧数据，所以我们会回退读当前帧。
+         */
         int read_frame = (current_vdma_frame + 1) % num_frames;
         
         /* 如果帧没有变化，根据模式决定是否跳过 */
         if (current_vdma_frame == last_vdma_frame && frame_count > 0) {
             if (!force_send) {
-                /* 非强制模式：跳过未变化的帧 */
-                skipped_frames++;
-                
-                /* 调试：每1000次跳过打印一次 */
-                if (debug_mode && skipped_frames % 1000 == 0) {
-                    printf("[DEBUG] 帧号未变化，已跳过 %d 次，当前帧号: %d\n", 
-                           skipped_frames, current_vdma_frame);
+                /*
+                 * 自动降级策略：
+                 * 如果“帧号不变”持续超过1秒，我们就自动切到强制发送，
+                 * 并改为读取 current_vdma_frame，避免一直读到旧缓冲。
+                 */
+                clock_gettime(CLOCK_MONOTONIC, &current_time);
+                double no_change_s = (current_time.tv_sec - last_frame_change_time.tv_sec) +
+                                     (current_time.tv_nsec - last_frame_change_time.tv_nsec) / 1e9;
+                if (no_change_s >= 1.0) {
+                    fprintf(stderr,
+                            "[WARN] VDMA帧指针超过%.1fs未变化，自动启用强制发送模式。\n"
+                            "       这通常表示AXI4-Stream侧的SOF/TLAST不规范或VDMA未配置多帧轮转。\n"
+                            "       你也可以在脚本后面加 `force` 选项显式开启。\n",
+                            no_change_s);
+                    force_send = 1;
+                    read_frame = current_vdma_frame;
+                } else {
+                    /* 非强制模式：短期内先跳过，降低网络无效发送 */
+                    skipped_frames++;
+
+                    /* 调试：每1000次跳过打印一次 */
+                    if (debug_mode && skipped_frames % 1000 == 0) {
+                        printf("[DEBUG] 帧号未变化，已跳过 %d 次，当前帧号: %d\n",
+                               skipped_frames, current_vdma_frame);
+                    }
+
+                    usleep(1000);
+                    continue;
                 }
-                
-                usleep(1000);
-                continue;
             }
             /* 强制模式：继续发送，但使用当前帧号 */
+            read_frame = current_vdma_frame;
+        }
+        if (current_vdma_frame != last_vdma_frame) {
+            clock_gettime(CLOCK_MONOTONIC, &last_frame_change_time);
         }
         last_vdma_frame = current_vdma_frame;
         

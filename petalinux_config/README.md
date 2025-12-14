@@ -229,7 +229,7 @@ python receive_stream.py -p 5000
 ### 8.2 在开发板上启动发送
 
 ```bash
-sudo ./run_network_stream.sh 10.72.43.200
+./run_network_stream.sh 10.72.43.200
 ```
 
 ---

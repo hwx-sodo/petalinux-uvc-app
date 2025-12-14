@@ -40,8 +40,8 @@ python receive_stream.py -p 5000
 # 配置开发板IP（首次需要）
 ifconfig eth0 10.72.43.10 netmask 255.255.0.0 up
 
-# 启动发送
-sudo ./run_network_stream.sh 10.72.43.200
+# 启动发送（很多PetaLinux系统没有sudo；root用户直接运行即可）
+./run_network_stream.sh 10.72.43.200
 ```
 
 **第3步：查看视频**
@@ -53,20 +53,20 @@ sudo ./run_network_stream.sh 10.72.43.200
 ```bash
 # TCP模式（可靠传输，两端都加-t）
 python receive_stream.py -p 5000 -t                    # PC端
-sudo ./run_network_stream.sh 10.72.43.200 5000 tcp     # 开发板
+./run_network_stream.sh 10.72.43.200 5000 tcp     # 开发板
 
 # 保存视频到文件
 python receive_stream.py -p 5000 -o output.avi
 
 # 调试模式（查看详细信息）
 python receive_stream.py -p 5000 -d                    # PC端
-sudo ./run_network_stream.sh 10.72.43.200 5000 udp debug  # 开发板
+./run_network_stream.sh 10.72.43.200 5000 udp debug  # 开发板
 
 # 强制发送模式（忽略帧变化检测，用于测试网络）
-sudo ./run_network_stream.sh 10.72.43.200 5000 udp force  # 开发板
+./run_network_stream.sh 10.72.43.200 5000 udp force  # 开发板
 
 # 调试+强制模式
-sudo ./run_network_stream.sh 10.72.43.200 5000 udp debug force
+./run_network_stream.sh 10.72.43.200 5000 udp debug force
 ```
 
 ## 编译说明

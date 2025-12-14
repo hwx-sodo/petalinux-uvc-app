@@ -5,6 +5,10 @@
 # 用法:
 #   ./run_network_stream.sh <PC的IP地址> [端口] [协议]
 #
+# 说明:
+# - 很多PetaLinux精简系统默认没有 sudo
+# - 如果你已经是 root（例如提示符是 root@...），请直接运行本脚本即可
+#
 # 示例:
 #   ./run_network_stream.sh 10.72.43.200           # UDP模式，默认端口5000
 #   ./run_network_stream.sh 10.72.43.200 8000      # UDP模式，端口8000
