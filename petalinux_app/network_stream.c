@@ -934,12 +934,10 @@ int main(int argc, char **argv)
                 break;
             case 'D':
                 diag_only = 1;
-                debug_mode = 1;  /* 诊断模式自动开启调试 */
                 break;
             case 's':
                 strncpy(save_file, optarg, sizeof(save_file) - 1);
                 diag_only = 1;   /* 保存文件也进入诊断模式 */
-                debug_mode = 1;
                 break;
             case 'F':
                 pixel_format = parse_pixel_format(optarg);
@@ -993,12 +991,6 @@ int main(int argc, char **argv)
     printf("\n等待视频流稳定...\n");
     sleep(1);
     
-    /* 诊断模式：打印详细寄存器信息 */
-    if (debug_mode) {
-        dump_vdma_registers(&vdma);
-        check_frame_buffer(&vdma);
-    }
-    
     /* 仅诊断模式：输出诊断后退出 */
     if (diag_only) {
         /* 如果指定了保存文件 */
@@ -1013,12 +1005,24 @@ int main(int argc, char **argv)
                 save_frame_to_file(&vdma, i, fn);
             }
         }
+
+        /* 可选：仅当显式 -d 时，才做深度寄存器/帧缓冲分析（避免长时间占用CPU触发RCU stall） */
+        if (debug_mode) {
+            dump_vdma_registers(&vdma);
+            check_frame_buffer(&vdma);
+        }
         
         printf("\n====== 诊断完成 ======\n");
         printf("后续操作:\n");
         printf("  - 网络传输测试: %s -H %s -p %d -d -f\n", argv[0], target_host, target_port);
         printf("  - 保存帧数据:   %s -D -s frame.bin\n", argv[0]);
         goto cleanup;
+    }
+
+    /* 非诊断模式下：调试才打印详细寄存器/帧缓冲 */
+    if (debug_mode) {
+        dump_vdma_registers(&vdma);
+        check_frame_buffer(&vdma);
     }
     
     /* 初始化网络 */
