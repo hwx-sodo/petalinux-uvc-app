@@ -667,6 +667,24 @@ void check_frame_buffer(vdma_control_t *vdma)
     }
 }
 
+static void build_frame_filename(const char *base, int frame_index, char *out, size_t out_len)
+{
+    /* 例: frame.bin -> frame_f0.bin；没有扩展名则追加 _f0.bin */
+    if (!base || !out || out_len == 0) return;
+    const char *dot = strrchr(base, '.');
+    if (dot && dot != base) {
+        size_t prefix_len = (size_t)(dot - base);
+        if (prefix_len + 16 + strlen(dot) + 1 > out_len) {
+            /* 回退：直接覆盖 */
+            snprintf(out, out_len, "%s", base);
+            return;
+        }
+        snprintf(out, out_len, "%.*s_f%d%s", (int)prefix_len, base, frame_index, dot);
+    } else {
+        snprintf(out, out_len, "%s_f%d.bin", base, frame_index);
+    }
+}
+
 /**
  * 保存帧数据到文件
  */
@@ -985,7 +1003,15 @@ int main(int argc, char **argv)
     if (diag_only) {
         /* 如果指定了保存文件 */
         if (save_file[0] != '\0') {
-            save_frame_to_file(&vdma, 0, save_file);
+            int cur = vdma_get_current_frame(&vdma);
+            printf("\n[DIAG] VDMA当前写入帧号: %d（总缓冲=%d）\n", cur, vdma.num_frames);
+            printf("[DIAG] 为避免保存到“没被写到的缓冲”，将保存全部帧缓冲到多个文件。\n");
+
+            for (int i = 0; i < vdma.num_frames; i++) {
+                char fn[512];
+                build_frame_filename(save_file, i, fn, sizeof(fn));
+                save_frame_to_file(&vdma, i, fn);
+            }
         }
         
         printf("\n====== 诊断完成 ======\n");
