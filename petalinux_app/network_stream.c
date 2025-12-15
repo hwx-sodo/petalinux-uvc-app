@@ -3,7 +3,7 @@
  * @brief 网络视频流传输应用程序（服务端）
  * 
  * 功能：
- * 1. 初始化VPSS和VDMA
+ * 1. 初始化VDMA
  * 2. 从DDR读取视频帧（YUV422，2字节/像素）
  * 3. 通过UDP/TCP网络发送到PC端
  * 
@@ -38,7 +38,6 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 
-#include "vpss_control.h"
 #include "vdma_control.h"
 
 /* ==================== 配置参数 ==================== */
@@ -85,7 +84,6 @@ typedef struct __attribute__((packed)) {
 
 /* ==================== 全局变量 ==================== */
 
-static vpss_control_t vpss;
 static vdma_control_t vdma;
 static volatile int running = 1;
 static int sock_fd = -1;
@@ -98,8 +96,6 @@ static int debug_mode = 0;  /* 调试模式：打印更多信息 */
 static int force_send = 0;  /* 强制发送模式：忽略帧变化检测 */
 static int diag_only = 0;   /* 仅诊断模式：不进行网络传输 */
 static char save_file[256] = "";  /* 保存帧数据到文件 */
-static int no_vpss = 1;     /* 默认不使用VPSS（你现在是YUV422直写VDMA） */
-
 /* 当前视频参数（可通过参数覆盖） */
 static int video_width = VIDEO_WIDTH;
 static int video_height = VIDEO_HEIGHT;
@@ -561,73 +557,7 @@ void dump_vdma_registers(vdma_control_t *vdma)
     printf("╚══════════════════════════════════════════════════════════════╝\n");
 }
 
-/**
- * 打印VPSS完整寄存器状态
- */
-void dump_vpss_registers(vpss_control_t *vpss)
-{
-    if (!vpss || !vpss->base_addr) {
-        printf("VPSS 未初始化\n");
-        return;
-    }
-    
-    volatile uint32_t *base = (volatile uint32_t*)vpss->base_addr;
-    
-    printf("\n");
-    printf("╔══════════════════════════════════════════════════════════════╗\n");
-    printf("║                    VPSS 完整寄存器转储                        ║\n");
-    printf("╠══════════════════════════════════════════════════════════════╣\n");
-    
-    /* 基本控制寄存器 */
-    uint32_t ctrl = base[0x00/4];
-    uint32_t gie = base[0x04/4];
-    uint32_t ier = base[0x08/4];
-    uint32_t isr = base[0x0C/4];
-    uint32_t version = base[0x10/4];
-    
-    printf("║ 基本控制寄存器:                                              ║\n");
-    printf("║   [0x00] Control:     0x%08X                             ║\n", ctrl);
-    printf("║   [0x04] GIE:         0x%08X                             ║\n", gie);
-    printf("║   [0x08] IER:         0x%08X                             ║\n", ier);
-    printf("║   [0x0C] ISR:         0x%08X                             ║\n", isr);
-    printf("║   [0x10] Version:     0x%08X                             ║\n", version);
-    
-    /* Control 位分析 */
-    printf("║                                                              ║\n");
-    printf("║ Control 位分析:                                              ║\n");
-    printf("║   - ap_start:         %d                                     ║\n", (ctrl >> 0) & 1);
-    printf("║   - ap_done:          %d                                     ║\n", (ctrl >> 1) & 1);
-    printf("║   - ap_idle:          %d                                     ║\n", (ctrl >> 2) & 1);
-    printf("║   - ap_ready:         %d                                     ║\n", (ctrl >> 3) & 1);
-    printf("║   - auto_restart:     %d                                     ║\n", (ctrl >> 7) & 1);
-    
-    /* 扩展寄存器 - 可能包含配置参数 */
-    printf("║                                                              ║\n");
-    printf("║ 扩展寄存器 (0x20-0x7C):                                      ║\n");
-    for (int i = 0x20; i < 0x80; i += 0x10) {
-        printf("║   [0x%02X]: 0x%08X  [0x%02X]: 0x%08X  [0x%02X]: 0x%08X  [0x%02X]: 0x%08X ║\n",
-               i, base[i/4], i+4, base[(i+4)/4], i+8, base[(i+8)/4], i+12, base[(i+12)/4]);
-    }
-    
-    /* 诊断 */
-    printf("║                                                              ║\n");
-    printf("║ 诊断结果:                                                    ║\n");
-    if (isr != 0) {
-        printf("║   ❌ ISR有错误标志: 0x%08X                               ║\n", isr);
-    }
-    if (version == 0) {
-        printf("║   ⚠ 版本号为0，可能不是标准VPSS IP                         ║\n");
-    }
-    if ((ctrl & 0x01) && (ctrl & 0x04)) {
-        printf("║   ✓ VPSS已启动且处于Idle状态                                ║\n");
-    } else if (ctrl & 0x01) {
-        printf("║   ✓ VPSS已启动，正在处理                                    ║\n");
-    } else {
-        printf("║   ❌ VPSS未启动                                              ║\n");
-    }
-    
-    printf("╚══════════════════════════════════════════════════════════════╝\n");
-}
+/* 当前工程不再使用VPSS：删除相关寄存器转储/初始化逻辑，避免误导。 */
 
 /**
  * 详细检查帧缓冲区内容
@@ -934,7 +864,6 @@ void print_usage(const char *prog)
     printf("  -D, --diag           仅诊断模式，不进行网络传输\n");
     printf("  -s, --save <文件>    保存帧0数据到文件\n");
     printf("  -F, --format <fmt>   YUV422打包: yuyv | uyvy (默认: yuyv；调试时也可自动判断)\n");
-    printf("  -n, --no-vpss        不初始化/启动VPSS（默认开启，适用于YUV422直写VDMA）\n");
     printf("  -h, --help           显示帮助信息\n");
     printf("\n示例:\n");
     printf("  %s -H 10.72.43.200 -p 5000        # UDP模式发送\n", prog);
@@ -942,7 +871,7 @@ void print_usage(const char *prog)
     printf("  %s -D                             # 仅诊断硬件\n", prog);
     printf("  %s -D -s frame.bin                # 诊断并保存帧数据\n", prog);
     printf("\n诊断选项说明:\n");
-    printf("  -d  打印VPSS/VDMA寄存器状态和帧缓冲内容\n");
+    printf("  -d  打印VDMA寄存器状态和帧缓冲内容\n");
     printf("  -D  只运行诊断，不进行网络传输\n");
     printf("  -s  保存帧缓冲#0到二进制文件，可用hexdump或PC端分析\n");
 }
@@ -963,13 +892,12 @@ int main(int argc, char **argv)
         {"diag",  no_argument,       0, 'D'},
         {"save",  required_argument, 0, 's'},
         {"format", required_argument, 0, 'F'},
-        {"no-vpss", no_argument,      0, 'n'},
         {"help",  no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
     
     int opt;
-    while ((opt = getopt_long(argc, argv, "H:p:tdfDs:F:nh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "H:p:tdfDs:F:h", long_options, NULL)) != -1) {
         switch (opt) {
             case 'H':
                 strncpy(target_host, optarg, sizeof(target_host) - 1);
@@ -1000,9 +928,6 @@ int main(int argc, char **argv)
                 bytes_per_pixel = pixel_format_to_bpp(pixel_format);
                 pixel_format_forced = 1;
                 break;
-            case 'n':
-                no_vpss = 1;
-                break;
             case 'h':
             case '?':
             default:
@@ -1025,20 +950,11 @@ int main(int argc, char **argv)
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     
-    /* 初始化VPSS（默认跳过：你现在是YUV422直写VDMA） */
-    if (!no_vpss) {
-        printf("[1/5] 初始化VPSS...\n");
-        if (vpss_init(&vpss, video_width, video_height) < 0) {
-            fprintf(stderr, "VPSS初始化失败\n");
-            ret = 1;
-            goto cleanup;
-        }
-    } else {
-        printf("[1/5] 跳过VPSS初始化 (--no-vpss)\n");
-    }
+    /* 当前工程不使用VPSS（YUV422直写VDMA） */
+    printf("[1/4] VPSS: 已移除（不初始化）\n");
     
     /* 初始化VDMA */
-    printf("\n[2/5] 初始化VDMA...\n");
+    printf("\n[2/4] 初始化VDMA...\n");
     if (vdma_init(&vdma, video_width, video_height,
                   bytes_per_pixel, NUM_FRAMES,
                   FRAME_BUFFER_PHYS) < 0) {
@@ -1048,24 +964,11 @@ int main(int argc, char **argv)
     }
     
     /* 启动VDMA */
-    printf("\n[3/5] 启动VDMA...\n");
+    printf("\n[3/4] 启动VDMA...\n");
     if (vdma_start(&vdma) < 0) {
         fprintf(stderr, "VDMA启动失败\n");
         ret = 1;
         goto cleanup;
-    }
-    
-    /* 启动VPSS（可选） */
-    if (!no_vpss) {
-        printf("\n[4/5] 启动VPSS...\n");
-        usleep(10000);
-        if (vpss_start(&vpss) < 0) {
-            fprintf(stderr, "VPSS启动失败\n");
-            ret = 1;
-            goto cleanup;
-        }
-    } else {
-        printf("\n[4/5] 跳过VPSS启动 (--no-vpss)\n");
     }
     
     /* 等待数据流稳定 */
@@ -1074,11 +977,6 @@ int main(int argc, char **argv)
     
     /* 诊断模式：打印详细寄存器信息 */
     if (debug_mode) {
-        if (!no_vpss) {
-            dump_vpss_registers(&vpss);
-        } else {
-            printf("\n[DEBUG] VPSS已跳过，不转储VPSS寄存器\n");
-        }
         dump_vdma_registers(&vdma);
         check_frame_buffer(&vdma);
     }
@@ -1098,7 +996,7 @@ int main(int argc, char **argv)
     }
     
     /* 初始化网络 */
-    printf("\n[5/5] 初始化网络连接...\n");
+    printf("\n[4/4] 初始化网络连接...\n");
     if (use_tcp) {
         sock_fd = init_tcp_socket(target_host, target_port);
     } else {
@@ -1121,9 +1019,6 @@ cleanup:
         close(sock_fd);
     }
     
-    if (!no_vpss) {
-        vpss_cleanup(&vpss);
-    }
     vdma_cleanup(&vdma);
     
     printf("程序退出\n");
