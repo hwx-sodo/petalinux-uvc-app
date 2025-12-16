@@ -442,9 +442,9 @@ def main():
     parser.add_argument('-c', '--color', type=str, default='auto',
                         choices=['auto', 'yuyv', 'uyvy'],
                         help='解码模式: auto(默认,按帧头自动), yuyv, uyvy')
-    parser.add_argument('--yuv-order', type=str, default='yuyv',
+    parser.add_argument('--yuv-order', type=str, default='uyvy',
                         choices=['yuyv', 'uyvy'],
-                        help='当输入是YUV422时的字节序 (默认: yuyv)')
+                        help='当输入是YUV422时的字节序 (默认: uyvy)')
     
     args = parser.parse_args()
     
