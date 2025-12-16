@@ -136,15 +136,25 @@ echo "协议:   $PROTOCOL"
 echo ""
 
 # 配置开发板IP
-echo -e "${YELLOW}检查开发板网络...${NC}"
+echo -e "${YELLOW}配置开发板网络...${NC}"
 CURRENT_IP=$(ifconfig eth0 2>/dev/null | grep 'inet ' | awk '{print $2}' | sed 's/addr://')
+
 if [ -z "$CURRENT_IP" ]; then
-    echo "配置eth0..."
+    # 没有IP，需要配置
+    echo "eth0 未配置，正在设置..."
     ifconfig eth0 ${BOARD_IP} netmask ${NETMASK} up
     sleep 1
     echo -e "${GREEN}✓ 已配置IP: ${BOARD_IP}${NC}"
+elif [ "$CURRENT_IP" != "$BOARD_IP" ]; then
+    # IP不匹配，重新配置
+    echo "当前IP: ${CURRENT_IP}，与预期不符"
+    echo "正在重新配置为: ${BOARD_IP}..."
+    ifconfig eth0 ${BOARD_IP} netmask ${NETMASK} up
+    sleep 1
+    echo -e "${GREEN}✓ 已重新配置IP: ${BOARD_IP}${NC}"
 else
-    echo -e "${GREEN}✓ 当前IP: ${CURRENT_IP}${NC}"
+    # IP正确
+    echo -e "${GREEN}✓ 网络已配置: ${BOARD_IP}${NC}"
 fi
 echo ""
 
