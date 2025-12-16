@@ -282,6 +282,12 @@ int vdma_start(vdma_context_t *ctx)
     /* 清除所有错误状态位 (写1清除) */
     REG_WRITE(ctx, VDMA_S2MM_DMASR, VDMA_DMASR_ERR_MASK);
     
+    /* 重要: 在启动前重新配置帧存储数量
+     * 某些情况下复位后FRMSTORE可能被清零
+     */
+    REG_WRITE(ctx, VDMA_S2MM_FRMSTORE, ctx->num_buffers - 1);
+    LOG_INFO("设置帧存储数量: %d (FRMSTORE=%d)", ctx->num_buffers, ctx->num_buffers - 1);
+    
     /* 配置控制寄存器:
      * - RS (Run/Stop) = 1: 启动
      * - Circular Mode = 1: 循环缓冲模式
@@ -538,21 +544,32 @@ void vdma_dump_frame_info(vdma_context_t *ctx, int frame_index)
         printf("\n");
     }
     
-    /* 统计分析 */
+    /* 统计分析 - 使用采样方式避免遍历整个帧缓冲导致卡死
+     * 在多帧模式下，遍历整个帧缓冲(65万字节)通过非缓存内存访问
+     * 加上VDMA同时在写入，可能导致总线冲突和程序卡死
+     */
     printf("----------------------------------------\n");
     
     int count_ff = 0, count_00 = 0;
-    for (size_t i = 0; i < ctx->frame_size; i++) {
-        if (frame[i] == 0xFF) count_ff++;
-        else if (frame[i] == 0x00) count_00++;
+    int sample_count = 0;
+    
+    /* 采样策略: 每隔一定字节采样一次，总共采样约1000个点 */
+    size_t sample_step = ctx->frame_size / 1000;
+    if (sample_step < 1) sample_step = 1;
+    
+    for (size_t i = 0; i < ctx->frame_size; i += sample_step) {
+        uint8_t val = frame[i];
+        if (val == 0xFF) count_ff++;
+        else if (val == 0x00) count_00++;
+        sample_count++;
     }
     
-    double pct_ff = 100.0 * count_ff / ctx->frame_size;
-    double pct_00 = 100.0 * count_00 / ctx->frame_size;
+    double pct_ff = 100.0 * count_ff / sample_count;
+    double pct_00 = 100.0 * count_00 / sample_count;
     
-    printf("统计:\n");
-    printf("  0xFF 字节: %7d (%.1f%%)\n", count_ff, pct_ff);
-    printf("  0x00 字节: %7d (%.1f%%)\n", count_00, pct_00);
+    printf("统计 (采样%d点):\n", sample_count);
+    printf("  0xFF 字节: %7d (约%.1f%%)\n", count_ff, pct_ff);
+    printf("  0x00 字节: %7d (约%.1f%%)\n", count_00, pct_00);
     
     if (pct_ff > 95.0) {
         printf("  [ERR] 几乎全是0xFF - VDMA可能未写入数据\n");
@@ -579,7 +596,7 @@ void vdma_cleanup(vdma_context_t *ctx)
     /* 解除所有帧缓冲映射 */
     for (int i = 0; i < MAX_FRAME_BUFFERS; i++) {
         if (ctx->frame_buffers[i] && ctx->frame_buffers[i] != MAP_FAILED) {
-            munmap(ctx->frame_buffers[i], 1310720);//640*512*4
+            munmap(ctx->frame_buffers[i], ctx->frame_size);
             ctx->frame_buffers[i] = NULL;
         }
     }
