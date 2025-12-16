@@ -312,6 +312,17 @@ int vdma_get_current_frame(vdma_control_t *vdma)
 
 /**
  * 清理VDMA资源
+ * 
+ * 注意：必须确保 DMA 引擎完全停止后再 munmap，否则飞行中的 DMA 传输
+ * 可能导致内核崩溃 (NULL pointer dereference)。
+ * 
+ * 清理顺序：
+ * 1. 停止 VDMA（清除 Run 位，等待 HALTED）
+ * 2. 执行软复位，确保 DMA 引擎完全停止
+ * 3. 等待足够长的时间，让所有 AXI 事务完成
+ * 4. 先 munmap VDMA 寄存器（防止后续误访问）
+ * 5. 再 munmap 帧缓冲
+ * 6. 最后关闭 UIO fd
  */
 void vdma_cleanup(vdma_control_t *vdma)
 {
@@ -319,20 +330,49 @@ void vdma_cleanup(vdma_control_t *vdma)
     
     printf("清理VDMA资源...\n");
     
-    vdma_stop(vdma);
-    
-    if (vdma->frame_buffer && vdma->frame_buffer != MAP_FAILED) {
-        munmap(vdma->frame_buffer, vdma->frame_buffer_size);
-        vdma->frame_buffer = NULL;
-    }
-    
+    /* 步骤1: 停止 VDMA */
     if (vdma->base_addr && vdma->base_addr != MAP_FAILED) {
+        /* 清除 Run 位 */
+        *(volatile uint32_t*)(vdma->base_addr + VDMA_S2MM_CONTROL) = 0;
+        usleep(10000);  /* 等待 10ms */
+        
+        /* 步骤2: 执行软复位，确保 DMA 引擎完全停止 */
+        printf("执行 VDMA 软复位...\n");
+        *(volatile uint32_t*)(vdma->base_addr + VDMA_S2MM_CONTROL) = VDMA_CTRL_RESET;
+        usleep(50000);  /* 等待 50ms 让复位生效 */
+        
+        /* 等待复位完成 */
+        int timeout = 200;
+        while ((*(volatile uint32_t*)(vdma->base_addr + VDMA_S2MM_CONTROL) & VDMA_CTRL_RESET) && timeout > 0) {
+            usleep(1000);
+            timeout--;
+        }
+        
+        /* 步骤3: 内存屏障，确保所有写操作完成 */
+        __sync_synchronize();
+        
+        /* 额外等待，让所有飞行中的 AXI 事务完成 */
+        printf("等待 DMA 事务完成...\n");
+        usleep(100000);  /* 等待 100ms */
+        
+        /* 步骤4: 先 munmap VDMA 寄存器 */
         munmap(vdma->base_addr, VDMA_ADDR_SIZE);
         vdma->base_addr = NULL;
     }
     
+    /* 步骤5: munmap 帧缓冲 */
+    if (vdma->frame_buffer && vdma->frame_buffer != MAP_FAILED) {
+        /* msync 确保数据一致性 */
+        msync(vdma->frame_buffer, vdma->frame_buffer_size, MS_SYNC);
+        munmap(vdma->frame_buffer, vdma->frame_buffer_size);
+        vdma->frame_buffer = NULL;
+    }
+    
+    /* 步骤6: 关闭 UIO fd */
     if (vdma->uio_fd >= 0) {
         close(vdma->uio_fd);
         vdma->uio_fd = -1;
     }
+    
+    printf("VDMA 资源清理完成\n");
 }
