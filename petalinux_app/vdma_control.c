@@ -218,8 +218,14 @@ int vdma_init(vdma_context_t *ctx,
      *----------------------------------------------------------------------*/
     LOG_INFO("配置帧缓冲地址...");
     
-    /* 配置帧存储数量 (NUM_FSTORES) */
+    /* 尝试配置帧存储数量 (NUM_FSTORES)
+     * 注意: 如果Vivado中NUM_FSTORES=1，这个寄存器可能是只读的
+     */
     REG_WRITE(ctx, VDMA_S2MM_FRMSTORE, num_bufs);
+    uint32_t actual_frmstore = REG_READ(ctx, VDMA_S2MM_FRMSTORE);
+    if (actual_frmstore != (uint32_t)num_bufs) {
+        LOG_INFO("  注意: FrmStore实际值=%d (硬件限制，将使用软件多缓冲)", actual_frmstore);
+    }
     
     /* 配置各帧缓冲起始地址 */
     uint32_t addr_offsets[] = {
