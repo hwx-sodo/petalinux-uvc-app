@@ -13,6 +13,11 @@
   CameraLink(16-bit) → Video In → Width Converter(32-bit) →
   VDMA S2MM → DDR(YUV422/YUYV) → 网络 → 本程序
 
+YUV422 YUYV格式说明：
+  每4字节表示2个像素: [Y0][U][Y1][V]
+  - Y0, Y1: 两个像素的亮度值 (0-255)
+  - U, V: 两个像素共享的色度值 (0-255, 128为中心)
+
 依赖：
     pip install opencv-python numpy
 
@@ -20,7 +25,6 @@
     python receive_stream.py -p 5000           # UDP模式
     python receive_stream.py -p 5000 -t        # TCP模式
     python receive_stream.py -p 5000 -d        # 调试模式
-    python receive_stream.py -p 5000 -o out.avi  # 保存视频
 """
 
 import socket
@@ -125,16 +129,71 @@ class VideoReceiver:
         return FMT_YUYV  # 默认
     
     def _yuv422_to_bgr(self, data, width, height, fmt):
-        """YUV422转BGR"""
+        """
+        YUV422 packed 转 BGR
+        
+        YUYV格式 (也叫YUY2):
+          内存布局: [Y0][U0][Y1][V0] [Y2][U2][Y3][V2] ...
+          每4字节 = 2像素
+        
+        UYVY格式:
+          内存布局: [U0][Y0][V0][Y1] [U2][Y2][V2][Y3] ...
+          每4字节 = 2像素
+        """
         if not HAS_OPENCV:
             return None
         
-        yuv = np.frombuffer(data, dtype=np.uint8).reshape((height, width, 2))
+        expected_size = width * height * 2
+        if len(data) != expected_size:
+            if self.debug:
+                print(f"[错误] 数据大小不匹配: {len(data)} != {expected_size}")
+            return None
         
-        if fmt == FMT_UYVY:
-            return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_UYVY)
-        else:  # YUYV
-            return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_YUY2)
+        try:
+            # 方法1: 使用OpenCV的YUV422转换 (推荐)
+            # 将数据reshape为 (height, width, 2) 的3D数组
+            yuv = np.frombuffer(data, dtype=np.uint8).reshape((height, width, 2))
+            
+            if fmt == FMT_UYVY:
+                bgr = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_UYVY)
+            else:  # YUYV
+                bgr = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_YUY2)
+            
+            return bgr
+            
+        except Exception as e:
+            if self.debug:
+                print(f"[错误] YUV转换失败: {e}")
+            return None
+    
+    def _debug_frame_data(self, data, width, height):
+        """调试: 打印帧数据信息"""
+        if not self.debug or self.frame_count > 0:
+            return
+        
+        print(f"\n[调试] 首帧数据分析:")
+        print(f"  大小: {len(data)} bytes (期望: {width * height * 2})")
+        
+        # 打印前32字节
+        print(f"  前32字节: {data[:32].hex()}")
+        
+        # YUYV解析
+        print(f"  YUYV解析 (前8像素):")
+        for i in range(0, min(32, len(data)), 4):
+            y0, u, y1, v = data[i], data[i+1], data[i+2], data[i+3]
+            print(f"    像素{i//2},{i//2+1}: Y0={y0:3d} U={u:3d} Y1={y1:3d} V={v:3d}")
+        
+        # 统计
+        arr = np.frombuffer(data, dtype=np.uint8)
+        print(f"  统计: min={arr.min()}, max={arr.max()}, mean={arr.mean():.1f}")
+        
+        # Y/U/V分量统计 (假设YUYV)
+        y_vals = arr[0::2]  # Y在偶数位置
+        u_vals = arr[1::4]  # U在位置1,5,9...
+        v_vals = arr[3::4]  # V在位置3,7,11...
+        print(f"  Y分量: min={y_vals.min()}, max={y_vals.max()}, mean={y_vals.mean():.1f}")
+        print(f"  U分量: min={u_vals.min()}, max={u_vals.max()}, mean={u_vals.mean():.1f}")
+        print(f"  V分量: min={v_vals.min()}, max={v_vals.max()}, mean={v_vals.mean():.1f}")
     
     def _init_writer(self, width, height, fps=60):
         """初始化视频写入器"""
@@ -207,6 +266,9 @@ class VideoReceiver:
                 if result:
                     header, payload = result
                     
+                    # 调试首帧
+                    self._debug_frame_data(payload, header.width, header.height)
+                    
                     if HAS_OPENCV:
                         fmt = self._get_format(header.format)
                         bgr = self._yuv422_to_bgr(
@@ -250,7 +312,7 @@ class VideoReceiver:
             return None
         
         if self.debug and self.frame_count == 0:
-            print(f"[调试] 首帧: {header}")
+            print(f"[调试] 首帧头: {header}")
         
         # 丢帧检测
         if self.last_frame_num >= 0:
@@ -275,12 +337,7 @@ class VideoReceiver:
                     print(f"[调试] 帧不完整: {len(frame_data)}/{header.frame_size}")
                 return None
         
-        payload = bytes(frame_data[:header.frame_size])
-        
-        if self.debug and self.frame_count == 0:
-            print(f"[调试] 首帧数据前32B: {payload[:32].hex()}")
-        
-        return header, payload
+        return header, bytes(frame_data[:header.frame_size])
     
     def _receive_frame_tcp(self):
         """接收TCP帧"""
@@ -296,6 +353,9 @@ class VideoReceiver:
         if not header.is_valid():
             return None
         
+        if self.debug and self.frame_count == 0:
+            print(f"[调试] 首帧头: {header}")
+        
         # 丢帧检测
         if self.last_frame_num >= 0:
             expected = self.last_frame_num + 1
@@ -307,8 +367,6 @@ class VideoReceiver:
         frame_data = self._recv_exact(self.client_sock, header.frame_size)
         if frame_data:
             self.bytes_received += len(frame_data)
-            if self.debug and self.frame_count == 0:
-                print(f"[调试] 首帧数据前32B: {frame_data[:32].hex()}")
         
         return (header, frame_data) if frame_data else None
     
@@ -329,6 +387,7 @@ class VideoReceiver:
         """显示循环"""
         print("\n========== 开始接收视频流 ==========")
         print("按 'q' 键退出")
+        print("按 's' 键保存当前帧")
         print("=====================================\n")
         
         last_stat_time = time.time()
@@ -351,8 +410,14 @@ class VideoReceiver:
                         if self.video_writer:
                             self.video_writer.write(frame)
                         
-                        if cv2.waitKey(1) & 0xFF == ord('q'):
+                        key = cv2.waitKey(1) & 0xFF
+                        if key == ord('q'):
                             break
+                        elif key == ord('s'):
+                            # 保存当前帧
+                            filename = f"frame_{self.frame_count}.png"
+                            cv2.imwrite(filename, frame)
+                            print(f"[保存] 帧已保存到: {filename}")
                             
                     except queue.Empty:
                         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -434,6 +499,11 @@ def main():
 数据流架构:
   CameraLink(16-bit) → Video In → Width Converter(32-bit) →
   VDMA S2MM → DDR(YUV422/YUYV) → 网络 → 本程序
+
+YUV422 YUYV格式:
+  每4字节 = 2像素: [Y0][U][Y1][V]
+  Y: 亮度 (0-255)
+  U,V: 色度 (0-255, 128为中心)
 
 示例:
   %(prog)s -p 5000              # UDP模式
