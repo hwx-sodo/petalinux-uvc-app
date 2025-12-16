@@ -579,7 +579,7 @@ void vdma_cleanup(vdma_context_t *ctx)
     /* 解除所有帧缓冲映射 */
     for (int i = 0; i < MAX_FRAME_BUFFERS; i++) {
         if (ctx->frame_buffers[i] && ctx->frame_buffers[i] != MAP_FAILED) {
-            munmap(ctx->frame_buffers[i], ctx->frame_size);
+            munmap(ctx->frame_buffers[i], 1310720);//640*512*4
             ctx->frame_buffers[i] = NULL;
         }
     }
