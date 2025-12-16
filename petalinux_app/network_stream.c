@@ -211,7 +211,7 @@ static int send_frame_header(int sock, uint32_t frame_num,
     header.frame_num = htonl(frame_num);
     header.width = htonl((uint32_t)width);
     header.height = htonl((uint32_t)height);
-    header.format = htonl(PIXFMT_YUYV);  /* 固定YUYV格式 */
+    header.format = htonl(PIXFMT_UYVY);  /* FPGA实际输出UYVY格式 */
     header.frame_size = htonl((uint32_t)frame_size);
     header.timestamp_sec = htonl((uint32_t)ts.tv_sec);
     header.timestamp_usec = htonl((uint32_t)(ts.tv_nsec / 1000));
@@ -404,9 +404,9 @@ static int stream_loop(void)
                 printf("%02X ", frame_data[i]);
             }
             printf("\n");
-            printf("  YUYV解析: ");
+            printf("  UYVY解析: ");
             for (int g = 0; g < 4; g++) {
-                printf("(Y0=%3d U=%3d Y1=%3d V=%3d) ",
+                printf("(U=%3d Y0=%3d V=%3d Y1=%3d) ",
                        frame_data[g*4+0], frame_data[g*4+1],
                        frame_data[g*4+2], frame_data[g*4+3]);
             }

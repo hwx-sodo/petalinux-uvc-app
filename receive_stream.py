@@ -13,8 +13,8 @@
   CameraLink(16-bit) → Video In → Width Converter(32-bit) →
   VDMA S2MM → DDR(YUV422/YUYV) → 网络 → 本程序
 
-YUV422 YUYV格式说明：
-  每4字节表示2个像素: [Y0][U][Y1][V]
+YUV422 UYVY格式说明 (FPGA实际发送格式)：
+  每4字节表示2个像素: [U][Y0][V][Y1]
   - Y0, Y1: 两个像素的亮度值 (0-255)
   - U, V: 两个像素共享的色度值 (0-255, 128为中心)
 
@@ -124,9 +124,8 @@ class VideoReceiver:
             return FMT_YUYV
         elif self.force_format == 'uyvy':
             return FMT_UYVY
-        elif header_format in (FMT_YUYV, FMT_UYVY):
-            return header_format
-        return FMT_YUYV  # 默认
+        # FPGA实际发送UYVY格式，忽略帧头中的格式字段
+        return FMT_UYVY  # 默认UYVY
     
     def _yuv422_to_bgr(self, data, width, height, fmt):
         """
@@ -177,20 +176,20 @@ class VideoReceiver:
         # 打印前32字节
         print(f"  前32字节: {data[:32].hex()}")
         
-        # YUYV解析
-        print(f"  YUYV解析 (前8像素):")
+        # UYVY解析 (FPGA实际格式)
+        print(f"  UYVY解析 (前8像素):")
         for i in range(0, min(32, len(data)), 4):
-            y0, u, y1, v = data[i], data[i+1], data[i+2], data[i+3]
-            print(f"    像素{i//2},{i//2+1}: Y0={y0:3d} U={u:3d} Y1={y1:3d} V={v:3d}")
+            u, y0, v, y1 = data[i], data[i+1], data[i+2], data[i+3]
+            print(f"    像素{i//2},{i//2+1}: U={u:3d} Y0={y0:3d} V={v:3d} Y1={y1:3d}")
         
         # 统计
         arr = np.frombuffer(data, dtype=np.uint8)
         print(f"  统计: min={arr.min()}, max={arr.max()}, mean={arr.mean():.1f}")
         
-        # Y/U/V分量统计 (假设YUYV)
-        y_vals = arr[0::2]  # Y在偶数位置
-        u_vals = arr[1::4]  # U在位置1,5,9...
-        v_vals = arr[3::4]  # V在位置3,7,11...
+        # Y/U/V分量统计 (UYVY格式)
+        u_vals = arr[0::4]  # U在位置0,4,8...
+        y_vals = arr[1::2]  # Y在奇数位置 (1,3,5,7...)
+        v_vals = arr[2::4]  # V在位置2,6,10...
         print(f"  Y分量: min={y_vals.min()}, max={y_vals.max()}, mean={y_vals.mean():.1f}")
         print(f"  U分量: min={u_vals.min()}, max={u_vals.max()}, mean={u_vals.mean():.1f}")
         print(f"  V分量: min={v_vals.min()}, max={v_vals.max()}, mean={v_vals.mean():.1f}")
@@ -500,8 +499,8 @@ def main():
   CameraLink(16-bit) → Video In → Width Converter(32-bit) →
   VDMA S2MM → DDR(YUV422/YUYV) → 网络 → 本程序
 
-YUV422 YUYV格式:
-  每4字节 = 2像素: [Y0][U][Y1][V]
+YUV422 UYVY格式 (FPGA实际发送):
+  每4字节 = 2像素: [U][Y0][V][Y1]
   Y: 亮度 (0-255)
   U,V: 色度 (0-255, 128为中心)
 
