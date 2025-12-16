@@ -214,17 +214,27 @@ int vdma_init(vdma_context_t *ctx,
     LOG_INFO("VDMA复位完成");
     
     /*----------------------------------------------------------------------
-     * 步骤4: 配置帧缓冲 (单帧缓冲模式)
+     * 步骤4: 配置帧缓冲 (多帧缓冲模式，避免读写冲突)
      *----------------------------------------------------------------------*/
-    LOG_INFO("配置帧缓冲 (单帧模式)...");
+    LOG_INFO("配置帧缓冲 (%d帧循环模式)...", num_bufs);
     
-    /* 单帧缓冲: FRMSTORE = 0 */
-    REG_WRITE(ctx, VDMA_S2MM_FRMSTORE, 0);
-    ctx->num_buffers = 1;
+    /* 设置帧存储数量: FRMSTORE = num_bufs - 1 */
+    REG_WRITE(ctx, VDMA_S2MM_FRMSTORE, num_bufs - 1);
+    ctx->num_buffers = num_bufs;
     
-    /* 配置帧缓冲地址 */
-    REG_WRITE(ctx, VDMA_S2MM_START_ADDR_0, phys_addr);
-    LOG_INFO("  帧缓冲地址: 0x%08X", phys_addr);
+    /* 配置所有帧缓冲地址 */
+    uint32_t frame_addr_regs[] = {
+        VDMA_S2MM_START_ADDR_0,
+        VDMA_S2MM_START_ADDR_1,
+        VDMA_S2MM_START_ADDR_2,
+        VDMA_S2MM_START_ADDR_3
+    };
+    
+    for (int i = 0; i < num_bufs && i < 4; i++) {
+        uint32_t addr = phys_addr + i * ctx->frame_size;
+        REG_WRITE(ctx, frame_addr_regs[i], addr);
+        LOG_INFO("  帧缓冲[%d] 地址: 0x%08X", i, addr);
+    }
     
     /*----------------------------------------------------------------------
      * 步骤5: 配置视频参数
@@ -367,12 +377,23 @@ const uint8_t* vdma_get_read_buffer(vdma_context_t *ctx, int *frame_index)
         return NULL;
     }
     
-    /* 单帧缓冲模式：直接读取帧0 */
-    if (frame_index) {
-        *frame_index = 0;
+    /* 多帧缓冲模式：读取非当前写入的帧，避免读写冲突 */
+    int write_frame = vdma_get_write_frame(ctx);
+    int read_frame;
+    
+    if (ctx->num_buffers == 1) {
+        /* 单帧模式：只能读帧0（可能有冲突） */
+        read_frame = 0;
+    } else {
+        /* 多帧模式：读取上一帧（已完成写入的帧） */
+        read_frame = (write_frame + ctx->num_buffers - 1) % ctx->num_buffers;
     }
     
-    return (const uint8_t*)ctx->frame_buffers;
+    if (frame_index) {
+        *frame_index = read_frame;
+    }
+    
+    return (const uint8_t*)ctx->frame_buffers + (size_t)read_frame * ctx->frame_size;
 }
 
 const uint8_t* vdma_get_frame_buffer(vdma_context_t *ctx, int index)
@@ -422,9 +443,15 @@ void vdma_dump_registers(vdma_context_t *ctx)
     printf("║   Stride (0xA8):   %-6d                                     ║\n", stride);
     printf("║   FrmStore (0x48): %-6d (表示 %d 个帧缓冲)                ║\n", frmstore, frmstore + 1);
     printf("║                                                              ║\n");
-    printf("║ 帧缓冲地址 (单帧模式):                                        ║\n");
-    printf("║   [0]: 0x%08X ✓                                       ║\n", 
+    printf("║ 帧缓冲地址 (%d帧循环模式):                                    ║\n", ctx->num_buffers);
+    printf("║   [0]: 0x%08X                                          ║\n", 
            REG_READ(ctx, VDMA_S2MM_START_ADDR_0));
+    if (ctx->num_buffers > 1)
+        printf("║   [1]: 0x%08X                                          ║\n", 
+               REG_READ(ctx, VDMA_S2MM_START_ADDR_1));
+    if (ctx->num_buffers > 2)
+        printf("║   [2]: 0x%08X                                          ║\n", 
+               REG_READ(ctx, VDMA_S2MM_START_ADDR_2));
     printf("║                                                              ║\n");
     
     /* 错误检测 */

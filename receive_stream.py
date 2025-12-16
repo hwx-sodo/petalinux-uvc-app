@@ -98,8 +98,8 @@ class VideoReceiver:
         self.invalid_headers = 0  # 无效帧头计数
         self.partial_frames = 0   # 不完整帧计数
         
-        # 帧队列（用于显示）
-        self.frame_queue = queue.Queue(maxsize=5)
+        # 帧队列（用于显示，增大队列避免丢帧）
+        self.frame_queue = queue.Queue(maxsize=10)
         
         # 视频写入器
         self.video_writer = None

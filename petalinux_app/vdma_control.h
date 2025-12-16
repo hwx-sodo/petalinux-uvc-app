@@ -11,9 +11,10 @@
  *     → 网络传输 → PC(OpenCV解码显示)
  * 
  * 视频格式：
- *   - 分辨率: 640x480 @ 60fps
+ *   - 分辨率: 640x480 @ 30fps
  *   - 像素格式: YUV422 (YUYV), 2字节/像素
  *   - 帧大小: 640 * 480 * 2 = 614,400 bytes
+ *   - 帧缓冲: 3帧循环模式（避免读写冲突）
  */
 
 #ifndef VDMA_CONTROL_H
@@ -51,8 +52,8 @@
 /** 每像素字节数 (YUV422 = 2) */
 #define BYTES_PER_PIXEL         2
 
-/** 帧缓冲数量 (单缓冲) */
-#define NUM_FRAME_BUFFERS       1
+/** 帧缓冲数量 (双缓冲，避免读写冲突) */
+#define NUM_FRAME_BUFFERS       3
 
 /** 每帧字节数 */
 #define FRAME_SIZE_BYTES        (VIDEO_WIDTH * VIDEO_HEIGHT * BYTES_PER_PIXEL)
