@@ -219,12 +219,19 @@ int vdma_init(vdma_context_t *ctx,
     LOG_INFO("配置帧缓冲地址...");
     
     /* 尝试配置帧存储数量 (NUM_FSTORES)
-     * 注意: 如果Vivado中NUM_FSTORES=1，这个寄存器可能是只读的
+     * 注意: 如果Vivado中NUM_FSTORES=1，这个寄存器是只读的
      */
     REG_WRITE(ctx, VDMA_S2MM_FRMSTORE, num_bufs);
     uint32_t actual_frmstore = REG_READ(ctx, VDMA_S2MM_FRMSTORE);
-    if (actual_frmstore != (uint32_t)num_bufs) {
-        LOG_INFO("  注意: FrmStore实际值=%d (硬件限制，将使用软件多缓冲)", actual_frmstore);
+    
+    /* FrmStore=0 表示1个帧存储，FrmStore=1 表示2个，以此类推 */
+    int hw_num_buffers = (int)actual_frmstore + 1;
+    
+    if (hw_num_buffers < num_bufs) {
+        LOG_INFO("  ⚠ 硬件帧存储数: %d (Vivado中NUM_FSTORES=%d)", hw_num_buffers, hw_num_buffers);
+        LOG_INFO("  ⚠ 请求帧缓冲数: %d", num_bufs);
+        LOG_INFO("  ⚠ 将使用硬件支持的 %d 个帧缓冲", hw_num_buffers);
+        ctx->num_buffers = hw_num_buffers;  /* 使用实际硬件支持的数量 */
     }
     
     /* 配置各帧缓冲起始地址 */
@@ -235,7 +242,8 @@ int vdma_init(vdma_context_t *ctx,
         VDMA_S2MM_START_ADDR_3
     };
     
-    for (int i = 0; i < num_bufs && i < 4; i++) {
+    /* 只配置硬件实际支持的帧缓冲数量 */
+    for (int i = 0; i < ctx->num_buffers && i < 4; i++) {
         uint32_t buf_addr = phys_addr + i * ctx->frame_size;
         REG_WRITE(ctx, addr_offsets[i], buf_addr);
         LOG_INFO("  帧缓冲[%d]: 0x%08X", i, buf_addr);
@@ -382,16 +390,21 @@ const uint8_t* vdma_get_read_buffer(vdma_context_t *ctx, int *frame_index)
         return NULL;
     }
     
-    /* 获取当前写入帧 */
-    int write_frame = vdma_get_write_frame(ctx);
-    if (write_frame < 0) {
-        return NULL;
-    }
+    int read_frame;
     
-    /* 选择一个不是当前写入的帧来读取
-     * 使用 (write_frame + 1) 可以获得最新完成的帧
-     */
-    int read_frame = (write_frame + 1) % ctx->num_buffers;
+    if (ctx->num_buffers == 1) {
+        /* 单帧缓冲模式：直接读取帧0
+         * 注意：可能会有轻微的画面撕裂，但数据仍然有效
+         */
+        read_frame = 0;
+    } else {
+        /* 多帧缓冲模式：选择一个不是当前写入的帧来读取 */
+        int write_frame = vdma_get_write_frame(ctx);
+        if (write_frame < 0) {
+            write_frame = 0;
+        }
+        read_frame = (write_frame + 1) % ctx->num_buffers;
+    }
     
     if (frame_index) {
         *frame_index = read_frame;
@@ -447,10 +460,20 @@ void vdma_dump_registers(vdma_context_t *ctx)
     printf("║   Stride (0xA8):   %-6d                                     ║\n", stride);
     printf("║   FrmStore (0x48): %-6d                                     ║\n", frmstore);
     printf("║                                                              ║\n");
-    printf("║ 帧缓冲地址:                                                   ║\n");
-    printf("║   [0]: 0x%08X                                             ║\n", REG_READ(ctx, VDMA_S2MM_START_ADDR_0));
-    printf("║   [1]: 0x%08X                                             ║\n", REG_READ(ctx, VDMA_S2MM_START_ADDR_1));
-    printf("║   [2]: 0x%08X                                             ║\n", REG_READ(ctx, VDMA_S2MM_START_ADDR_2));
+    printf("║ 帧缓冲地址 (实际使用: %d 个):                                  ║\n", ctx->num_buffers);
+    printf("║   [0]: 0x%08X %s                                    ║\n", 
+           REG_READ(ctx, VDMA_S2MM_START_ADDR_0), 
+           ctx->num_buffers >= 1 ? "✓" : " ");
+    if (frmstore >= 1) {
+        printf("║   [1]: 0x%08X %s                                    ║\n", 
+               REG_READ(ctx, VDMA_S2MM_START_ADDR_1),
+               ctx->num_buffers >= 2 ? "✓" : " ");
+    }
+    if (frmstore >= 2) {
+        printf("║   [2]: 0x%08X %s                                    ║\n", 
+               REG_READ(ctx, VDMA_S2MM_START_ADDR_2),
+               ctx->num_buffers >= 3 ? "✓" : " ");
+    }
     printf("║                                                              ║\n");
     
     /* 错误检测 */
