@@ -214,48 +214,20 @@ int vdma_init(vdma_context_t *ctx,
     LOG_INFO("VDMA复位完成");
     
     /*----------------------------------------------------------------------
-     * 步骤4: 配置帧缓冲数量 (必须在 Run 之前!)
+     * 步骤4: 配置帧缓冲 (单帧缓冲模式)
      *----------------------------------------------------------------------*/
-    LOG_INFO("配置帧缓冲...");
+    LOG_INFO("配置帧缓冲 (单帧模式)...");
     
-    /* 
-     * 根据 Xilinx PG020 文档：
-     * FRMSTORE 寄存器存储的是 (帧数 - 1)
-     * 例如：3个帧缓冲，应该写入 2
-     */
-    uint32_t frmstore_value = num_bufs - 1;
-    REG_WRITE(ctx, VDMA_S2MM_FRMSTORE, frmstore_value);
+    /* 单帧缓冲: FRMSTORE = 0 */
+    REG_WRITE(ctx, VDMA_S2MM_FRMSTORE, 0);
+    ctx->num_buffers = 1;
     
-    /* 验证写入 */
-    uint32_t actual_frmstore = REG_READ(ctx, VDMA_S2MM_FRMSTORE);
-    LOG_INFO("  FRMSTORE 写入: %d, 读回: %d", frmstore_value, actual_frmstore);
-    
-    if (actual_frmstore != frmstore_value) {
-        LOG_INFO("  ⚠ FRMSTORE 写入未生效，使用默认值");
-    }
-    
-    /* 实际使用的帧缓冲数 = FRMSTORE + 1 */
-    ctx->num_buffers = (int)actual_frmstore + 1;
-    LOG_INFO("  实际帧缓冲数: %d", ctx->num_buffers);
+    /* 配置帧缓冲地址 */
+    REG_WRITE(ctx, VDMA_S2MM_START_ADDR_0, phys_addr);
+    LOG_INFO("  帧缓冲地址: 0x%08X", phys_addr);
     
     /*----------------------------------------------------------------------
-     * 步骤5: 配置帧缓冲地址
-     *----------------------------------------------------------------------*/
-    uint32_t addr_offsets[] = {
-        VDMA_S2MM_START_ADDR_0,
-        VDMA_S2MM_START_ADDR_1,
-        VDMA_S2MM_START_ADDR_2,
-        VDMA_S2MM_START_ADDR_3
-    };
-    
-    for (int i = 0; i < ctx->num_buffers && i < 4; i++) {
-        uint32_t buf_addr = phys_addr + i * ctx->frame_size;
-        REG_WRITE(ctx, addr_offsets[i], buf_addr);
-        LOG_INFO("  帧缓冲[%d]: 0x%08X", i, buf_addr);
-    }
-    
-    /*----------------------------------------------------------------------
-     * 步骤6: 配置视频参数
+     * 步骤5: 配置视频参数
      *----------------------------------------------------------------------*/
     LOG_INFO("配置视频参数...");
     
@@ -395,27 +367,12 @@ const uint8_t* vdma_get_read_buffer(vdma_context_t *ctx, int *frame_index)
         return NULL;
     }
     
-    int read_frame;
-    
-    if (ctx->num_buffers == 1) {
-        /* 单帧缓冲模式：直接读取帧0
-         * 注意：可能会有轻微的画面撕裂，但数据仍然有效
-         */
-        read_frame = 0;
-    } else {
-        /* 多帧缓冲模式：选择一个不是当前写入的帧来读取 */
-        int write_frame = vdma_get_write_frame(ctx);
-        if (write_frame < 0) {
-            write_frame = 0;
-        }
-        read_frame = (write_frame + 1) % ctx->num_buffers;
-    }
-    
+    /* 单帧缓冲模式：直接读取帧0 */
     if (frame_index) {
-        *frame_index = read_frame;
+        *frame_index = 0;
     }
     
-    return (const uint8_t*)ctx->frame_buffers + (size_t)read_frame * ctx->frame_size;
+    return (const uint8_t*)ctx->frame_buffers;
 }
 
 const uint8_t* vdma_get_frame_buffer(vdma_context_t *ctx, int index)
@@ -465,20 +422,9 @@ void vdma_dump_registers(vdma_context_t *ctx)
     printf("║   Stride (0xA8):   %-6d                                     ║\n", stride);
     printf("║   FrmStore (0x48): %-6d (表示 %d 个帧缓冲)                ║\n", frmstore, frmstore + 1);
     printf("║                                                              ║\n");
-    printf("║ 帧缓冲地址 (实际使用: %d 个):                                  ║\n", ctx->num_buffers);
-    printf("║   [0]: 0x%08X %s                                    ║\n", 
-           REG_READ(ctx, VDMA_S2MM_START_ADDR_0), 
-           ctx->num_buffers >= 1 ? "✓" : " ");
-    if (frmstore >= 1) {
-        printf("║   [1]: 0x%08X %s                                    ║\n", 
-               REG_READ(ctx, VDMA_S2MM_START_ADDR_1),
-               ctx->num_buffers >= 2 ? "✓" : " ");
-    }
-    if (frmstore >= 2) {
-        printf("║   [2]: 0x%08X %s                                    ║\n", 
-               REG_READ(ctx, VDMA_S2MM_START_ADDR_2),
-               ctx->num_buffers >= 3 ? "✓" : " ");
-    }
+    printf("║ 帧缓冲地址 (单帧模式):                                        ║\n");
+    printf("║   [0]: 0x%08X ✓                                       ║\n", 
+           REG_READ(ctx, VDMA_S2MM_START_ADDR_0));
     printf("║                                                              ║\n");
     
     /* 错误检测 */

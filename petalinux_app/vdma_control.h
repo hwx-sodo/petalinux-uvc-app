@@ -51,8 +51,8 @@
 /** 每像素字节数 (YUV422 = 2) */
 #define BYTES_PER_PIXEL         2
 
-/** 帧缓冲数量 (三缓冲，避免撕裂) */
-#define NUM_FRAME_BUFFERS       3
+/** 帧缓冲数量 (单缓冲) */
+#define NUM_FRAME_BUFFERS       1
 
 /** 每帧字节数 */
 #define FRAME_SIZE_BYTES        (VIDEO_WIDTH * VIDEO_HEIGHT * BYTES_PER_PIXEL)
@@ -174,7 +174,7 @@ typedef struct {
  * @param width     图像宽度 (像素)
  * @param height    图像高度 (像素)
  * @param bpp       每像素字节数 (YUV422=2)
- * @param num_bufs  帧缓冲数量 (推荐3)
+ * @param num_bufs  帧缓冲数量 (当前为1)
  * @param phys_addr 帧缓冲物理地址
  * @return 0成功, -1失败
  */
