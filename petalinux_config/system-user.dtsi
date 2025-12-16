@@ -1,0 +1,89 @@
+/include/ "system-conf.dtsi"
+/ {
+};
+
+/* ============================================================
+ * GEM3 以太网配置
+ * PHY: KSZ9031RNX (Micrel/Microchip)
+ * 接口: RGMII
+ * PHY地址: 3
+ * ============================================================ */
+&gem3 {
+    status = "okay";
+    phy-mode = "rgmii-id";
+    phy-handle = <&phy3>;
+    
+    /* MDIO 总线 */
+    mdio: mdio {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        
+        /* KSZ9031RNX PHY @ 地址 3 */
+        phy3: ethernet-phy@3 {
+            reg = <3>;
+            compatible = "micrel,ksz9031", "ethernet-phy-ieee802.3-c22";
+            
+            /* 
+             * KSZ9031 RGMII 时序调整
+             * 根据PCB走线可能需要微调这些值
+             * 如果网络不稳定，可以尝试注释掉或调整
+             */
+            
+            /* RX 数据线延迟 (RXD0-RXD3) */
+            rxc-skew-ps = <900>;      /* RX 时钟偏移 */
+            rxdv-skew-ps = <0>;       /* RX_DV 偏移 */
+            rxd0-skew-ps = <0>;
+            rxd1-skew-ps = <0>;
+            rxd2-skew-ps = <0>;
+            rxd3-skew-ps = <0>;
+            
+            /* TX 数据线延迟 (TXD0-TXD3) */
+            txc-skew-ps = <900>;      /* TX 时钟偏移 */
+            txen-skew-ps = <0>;       /* TX_EN 偏移 */
+            txd0-skew-ps = <0>;
+            txd1-skew-ps = <0>;
+            txd2-skew-ps = <0>;
+            txd3-skew-ps = <0>;
+            
+            /* 可选：PHY复位GPIO（如果硬件连接了复位引脚，取消注释并修改GPIO号）*/
+            /* reset-gpios = <&gpio 38 GPIO_ACTIVE_LOW>; */
+            /* reset-assert-us = <10000>; */
+            /* reset-deassert-us = <300>; */
+        };
+    };
+};
+
+/* ============================================================
+ * 保留内存配置 - 用于视频帧缓冲
+ * 
+ * 注意：不能使用 0x20000000，因为U-Boot使用该地址加载boot.scr
+ * 移动到 0x70000000 避免冲突
+ * ============================================================ */
+&reserved_memory {
+    #address-cells = <2>;
+    #size-cells = <2>;
+    ranges;
+    
+    /* 视频帧缓冲区 - VDMA使用 */
+    video_buffer: video_buffer@70000000 {
+        compatible = "shared-dma-pool";
+        reg = <0x0 0x70000000 0x0 0x10000000>;  /* 256MB @ 0x70000000 (1.75GB) */
+        no-map;
+    };
+};
+
+/* ============================================================
+ * VDMA 配置 - 使用UIO驱动
+ * ============================================================ */
+&axi_vdma_0 {
+    compatible = "generic-uio";
+    status = "okay";
+};
+
+/* ============================================================
+ * VPSS 配置 - 使用UIO驱动
+ * ============================================================ */
+&v_proc_ss_0 {
+    compatible = "generic-uio";
+    status = "okay";
+};
