@@ -139,13 +139,16 @@
  * 数据结构
  *============================================================================*/
 
+/** 最大帧缓冲数量 */
+#define MAX_FRAME_BUFFERS       4
+
 /**
  * VDMA控制器上下文结构
  */
 typedef struct {
     /* 映射后的虚拟地址 */
     volatile void *regs;            /* VDMA寄存器基址 (mmap后) */
-    void *frame_buffers;            /* 帧缓冲区基址 (mmap后) */
+    void *frame_buffers[MAX_FRAME_BUFFERS];  /* 各帧缓冲区 (分别mmap) */
     
     /* 物理地址 */
     uint32_t frame_buffer_phys;     /* 帧缓冲物理基址 */

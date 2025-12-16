@@ -185,25 +185,27 @@ int vdma_init(vdma_context_t *ctx,
     }
     LOG_INFO("/dev/mem 已打开");
     
-    /* 只映射实际需要的帧数据大小，而不是整个16MB间隔空间 */
-    size_t total_buffer_size = ctx->frame_size * num_bufs;
-    
-    LOG_INFO("映射帧缓冲区: 物理地址=0x%08X, 大小=%zu bytes...", phys_addr, total_buffer_size);
-    
-    ctx->frame_buffers = mmap(NULL, total_buffer_size,
-                              PROT_READ,  /* 只需要读取权限 */
-                              MAP_SHARED,
-                              ctx->mem_fd, phys_addr);
-    
-    if (ctx->frame_buffers == MAP_FAILED) {
-        LOG_ERROR("映射帧缓冲区失败: %s", strerror(errno));
-        LOG_ERROR("物理地址: 0x%08X, 大小: %zu bytes", phys_addr, total_buffer_size);
-        vdma_cleanup(ctx);
-        return -1;
+    /* 分别映射每个帧缓冲区 (因为帧之间间隔16MB) */
+    for (int i = 0; i < num_bufs && i < MAX_FRAME_BUFFERS; i++) {
+        uint32_t frame_phys = phys_addr + i * FRAME_BUFFER_STRIDE;
+        
+        LOG_INFO("映射帧缓冲[%d]: 物理地址=0x%08X, 大小=%zu bytes...", 
+                 i, frame_phys, ctx->frame_size);
+        
+        ctx->frame_buffers[i] = mmap(NULL, ctx->frame_size,
+                                     PROT_READ,  /* 只需要读取权限 */
+                                     MAP_SHARED,
+                                     ctx->mem_fd, frame_phys);
+        
+        if (ctx->frame_buffers[i] == MAP_FAILED) {
+            LOG_ERROR("映射帧缓冲[%d]失败: %s", i, strerror(errno));
+            ctx->frame_buffers[i] = NULL;
+            vdma_cleanup(ctx);
+            return -1;
+        }
+        
+        LOG_INFO("帧缓冲[%d]已映射到: %p", i, ctx->frame_buffers[i]);
     }
-    
-    LOG_INFO("帧缓冲区已映射到: %p (大小: %zu bytes)", 
-             ctx->frame_buffers, total_buffer_size);
     
     /*----------------------------------------------------------------------
      * 步骤3: 复位VDMA
@@ -383,7 +385,7 @@ int vdma_get_write_frame(vdma_context_t *ctx)
 
 const uint8_t* vdma_get_read_buffer(vdma_context_t *ctx, int *frame_index)
 {
-    if (!ctx || !ctx->frame_buffers) {
+    if (!ctx) {
         return NULL;
     }
     
@@ -403,20 +405,24 @@ const uint8_t* vdma_get_read_buffer(vdma_context_t *ctx, int *frame_index)
         *frame_index = read_frame;
     }
     
-    return (const uint8_t*)ctx->frame_buffers + (size_t)read_frame * FRAME_BUFFER_STRIDE;
+    if (read_frame < 0 || read_frame >= MAX_FRAME_BUFFERS || !ctx->frame_buffers[read_frame]) {
+        return NULL;
+    }
+    
+    return (const uint8_t*)ctx->frame_buffers[read_frame];
 }
 
 const uint8_t* vdma_get_frame_buffer(vdma_context_t *ctx, int index)
 {
-    if (!ctx || !ctx->frame_buffers) {
+    if (!ctx) {
         return NULL;
     }
     
-    if (index < 0 || index >= ctx->num_buffers) {
+    if (index < 0 || index >= ctx->num_buffers || index >= MAX_FRAME_BUFFERS) {
         return NULL;
     }
     
-    return (const uint8_t*)ctx->frame_buffers + (size_t)index * FRAME_BUFFER_STRIDE;
+    return (const uint8_t*)ctx->frame_buffers[index];
 }
 
 void vdma_dump_registers(vdma_context_t *ctx)
@@ -426,11 +432,6 @@ void vdma_dump_registers(vdma_context_t *ctx)
         return;
     }
     
-    printf("\n");
-    printf("╔══════════════════════════════════════════════════════════════╗\n");
-    printf("║                    VDMA 寄存器状态                           ║\n");
-    printf("╠══════════════════════════════════════════════════════════════╣\n");
-    
     /* S2MM通道寄存器 */
     uint32_t dmacr = REG_READ(ctx, VDMA_S2MM_DMACR);
     uint32_t dmasr = REG_READ(ctx, VDMA_S2MM_DMASR);
@@ -439,74 +440,72 @@ void vdma_dump_registers(vdma_context_t *ctx)
     uint32_t stride = REG_READ(ctx, VDMA_S2MM_FRMDLY_STRIDE);
     uint32_t frmstore = REG_READ(ctx, VDMA_S2MM_FRMSTORE);
     
-    printf("║ S2MM 通道 (Stream → Memory):                                ║\n");
-    printf("║   控制寄存器 (0x30): 0x%08X                               ║\n", dmacr);
-    printf("║     - Run/Stop:    %d                                        ║\n", (dmacr >> 0) & 1);
-    printf("║     - Circular:    %d                                        ║\n", (dmacr >> 1) & 1);
-    printf("║     - Reset:       %d                                        ║\n", (dmacr >> 2) & 1);
-    printf("║   状态寄存器 (0x34): 0x%08X                               ║\n", dmasr);
-    printf("║     - Halted:      %d                                        ║\n", (dmasr >> 0) & 1);
-    printf("║     - Idle:        %d                                        ║\n", (dmasr >> 1) & 1);
-    printf("║     - FrameCount:  %d                                        ║\n", (dmasr >> 16) & 0xFF);
-    printf("║   VSize (0xA0):    %-6d (期望: %d)                        ║\n", vsize, ctx->height);
-    printf("║   HSize (0xA4):    %-6d (期望: %d)                      ║\n", hsize, ctx->width * ctx->bytes_per_pixel);
-    printf("║   Stride (0xA8):   %-6d                                     ║\n", stride);
-    printf("║   FrmStore (0x48): %-6d (表示 %d 个帧缓冲)                ║\n", frmstore, frmstore + 1);
-    printf("║                                                              ║\n");
-    printf("║ 帧缓冲地址 (%d帧循环模式):                                    ║\n", ctx->num_buffers);
-    printf("║   [0]: 0x%08X                                          ║\n", 
-           REG_READ(ctx, VDMA_S2MM_START_ADDR_0));
+    printf("\n");
+    printf("============ VDMA 寄存器状态 ============\n");
+    printf("S2MM 通道 (Stream -> Memory):\n");
+    printf("  控制寄存器 (0x30): 0x%08X\n", dmacr);
+    printf("    - Run/Stop: %d, Circular: %d, Reset: %d\n", 
+           (dmacr >> 0) & 1, (dmacr >> 1) & 1, (dmacr >> 2) & 1);
+    printf("  状态寄存器 (0x34): 0x%08X\n", dmasr);
+    printf("    - Halted: %d, Idle: %d, FrameCount: %d\n",
+           (dmasr >> 0) & 1, (dmasr >> 1) & 1, (dmasr >> 16) & 0xFF);
+    printf("  VSize: %d (期望: %d)\n", vsize, ctx->height);
+    printf("  HSize: %d (期望: %d)\n", hsize, ctx->width * ctx->bytes_per_pixel);
+    printf("  Stride: %d\n", stride);
+    printf("  FrmStore: %d (%d个帧缓冲)\n", frmstore, frmstore + 1);
+    printf("\n");
+    printf("帧缓冲地址 (%d帧模式):\n", ctx->num_buffers);
+    printf("  [0]: 0x%08X\n", REG_READ(ctx, VDMA_S2MM_START_ADDR_0));
     if (ctx->num_buffers > 1)
-        printf("║   [1]: 0x%08X                                          ║\n", 
-               REG_READ(ctx, VDMA_S2MM_START_ADDR_1));
+        printf("  [1]: 0x%08X\n", REG_READ(ctx, VDMA_S2MM_START_ADDR_1));
     if (ctx->num_buffers > 2)
-        printf("║   [2]: 0x%08X                                          ║\n", 
-               REG_READ(ctx, VDMA_S2MM_START_ADDR_2));
-    printf("║                                                              ║\n");
+        printf("  [2]: 0x%08X\n", REG_READ(ctx, VDMA_S2MM_START_ADDR_2));
+    printf("\n");
     
     /* 错误检测 */
-    printf("║ 状态诊断:                                                    ║\n");
+    printf("状态诊断:\n");
     if (dmasr & VDMA_DMASR_HALTED) {
-        printf("║   ❌ VDMA处于HALTED状态                                     ║\n");
+        printf("  [ERR] VDMA处于HALTED状态\n");
     } else if (dmacr & VDMA_DMACR_RS) {
-        printf("║   ✓ VDMA正在运行                                            ║\n");
+        printf("  [OK] VDMA正在运行\n");
     } else {
-        printf("║   ⚠ VDMA已停止                                              ║\n");
+        printf("  [WARN] VDMA已停止\n");
     }
     
-    if (dmasr & VDMA_DMASR_DMA_INT_ERR) printf("║   ❌ DMA内部错误                                            ║\n");
-    if (dmasr & VDMA_DMASR_DMA_SLV_ERR) printf("║   ❌ DMA从设备错误                                          ║\n");
-    if (dmasr & VDMA_DMASR_DMA_DEC_ERR) printf("║   ❌ DMA解码错误                                            ║\n");
-    if (dmasr & VDMA_DMASR_SOF_EARLY)   printf("║   ⚠ SOF提前错误                                             ║\n");
-    if (dmasr & VDMA_DMASR_EOL_EARLY)   printf("║   ⚠ EOL提前错误                                             ║\n");
-    if (dmasr & VDMA_DMASR_SOF_LATE)    printf("║   ⚠ SOF延迟错误                                             ║\n");
-    if (dmasr & VDMA_DMASR_EOL_LATE)    printf("║   ⚠ EOL延迟错误                                             ║\n");
+    if (dmasr & VDMA_DMASR_DMA_INT_ERR) printf("  [ERR] DMA内部错误\n");
+    if (dmasr & VDMA_DMASR_DMA_SLV_ERR) printf("  [ERR] DMA从设备错误\n");
+    if (dmasr & VDMA_DMASR_DMA_DEC_ERR) printf("  [ERR] DMA解码错误\n");
+    if (dmasr & VDMA_DMASR_SOF_EARLY)   printf("  [WARN] SOF提前错误\n");
+    if (dmasr & VDMA_DMASR_EOL_EARLY)   printf("  [WARN] EOL提前错误\n");
+    if (dmasr & VDMA_DMASR_SOF_LATE)    printf("  [WARN] SOF延迟错误\n");
+    if (dmasr & VDMA_DMASR_EOL_LATE)    printf("  [WARN] EOL延迟错误\n");
     
-    printf("╚══════════════════════════════════════════════════════════════╝\n");
+    printf("=========================================\n");
 }
 
 void vdma_dump_frame_info(vdma_context_t *ctx, int frame_index)
 {
-    if (!ctx || !ctx->frame_buffers) {
+    if (!ctx) {
         printf("帧缓冲未初始化\n");
         return;
     }
     
-    if (frame_index < 0 || frame_index >= ctx->num_buffers) {
+    if (frame_index < 0 || frame_index >= ctx->num_buffers || frame_index >= MAX_FRAME_BUFFERS) {
         printf("无效的帧索引: %d\n", frame_index);
         return;
     }
     
     const uint8_t *frame = vdma_get_frame_buffer(ctx, frame_index);
-    if (!frame) return;
+    if (!frame) {
+        printf("帧缓冲[%d]未映射\n", frame_index);
+        return;
+    }
     
     uint32_t phys_addr = ctx->frame_buffer_phys + frame_index * FRAME_BUFFER_STRIDE;
     
     printf("\n");
-    printf("┌──────────────────────────────────────────────────────────────┐\n");
-    printf("│ 帧缓冲 #%d  物理地址: 0x%08X                              │\n", 
+    printf("-------- 帧缓冲 #%d  物理地址: 0x%08X --------\n", 
            frame_index, phys_addr);
-    printf("├──────────────────────────────────────────────────────────────┤\n");
     
     /* 打印多个位置的数据 */
     struct { size_t offset; const char *name; } positions[] = {
@@ -521,14 +520,14 @@ void vdma_dump_frame_info(vdma_context_t *ctx, int frame_index)
         size_t offset = positions[p].offset;
         if (offset >= ctx->frame_size) continue;
         
-        printf("│ %s [0x%06zX]: ", positions[p].name, offset);
+        printf("  %s [0x%06zX]: ", positions[p].name, offset);
         for (int i = 0; i < 16 && (offset + i) < ctx->frame_size; i++) {
             printf("%02X ", frame[offset + i]);
         }
-        printf("│\n");
+        printf("\n");
         
         /* YUV422解析 (YUYV: Y0 U Y1 V) */
-        printf("│   YUYV解析: ");
+        printf("    YUYV解析: ");
         for (int g = 0; g < 4 && (offset + g * 4 + 3) < ctx->frame_size; g++) {
             uint8_t y0 = frame[offset + g * 4 + 0];
             uint8_t u  = frame[offset + g * 4 + 1];
@@ -536,11 +535,11 @@ void vdma_dump_frame_info(vdma_context_t *ctx, int frame_index)
             uint8_t v  = frame[offset + g * 4 + 3];
             printf("(Y0=%3d U=%3d Y1=%3d V=%3d) ", y0, u, y1, v);
         }
-        printf("│\n");
+        printf("\n");
     }
     
     /* 统计分析 */
-    printf("├──────────────────────────────────────────────────────────────┤\n");
+    printf("----------------------------------------\n");
     
     int count_ff = 0, count_00 = 0;
     for (size_t i = 0; i < ctx->frame_size; i++) {
@@ -551,19 +550,19 @@ void vdma_dump_frame_info(vdma_context_t *ctx, int frame_index)
     double pct_ff = 100.0 * count_ff / ctx->frame_size;
     double pct_00 = 100.0 * count_00 / ctx->frame_size;
     
-    printf("│ 统计:                                                        │\n");
-    printf("│   0xFF 字节: %7d (%.1f%%)                                 │\n", count_ff, pct_ff);
-    printf("│   0x00 字节: %7d (%.1f%%)                                 │\n", count_00, pct_00);
+    printf("统计:\n");
+    printf("  0xFF 字节: %7d (%.1f%%)\n", count_ff, pct_ff);
+    printf("  0x00 字节: %7d (%.1f%%)\n", count_00, pct_00);
     
     if (pct_ff > 95.0) {
-        printf("│   ❌ 几乎全是0xFF - VDMA可能未写入数据                       │\n");
+        printf("  [ERR] 几乎全是0xFF - VDMA可能未写入数据\n");
     } else if (pct_00 > 95.0) {
-        printf("│   ⚠ 几乎全是0x00 - 可能是黑屏或无信号                        │\n");
+        printf("  [WARN] 几乎全是0x00 - 可能是黑屏或无信号\n");
     } else {
-        printf("│   ✓ 有有效数据                                               │\n");
+        printf("  [OK] 有有效数据\n");
     }
     
-    printf("└──────────────────────────────────────────────────────────────┘\n");
+    printf("----------------------------------------\n");
 }
 
 void vdma_cleanup(vdma_context_t *ctx)
@@ -577,11 +576,12 @@ void vdma_cleanup(vdma_context_t *ctx)
         vdma_stop(ctx);
     }
     
-    /* 解除帧缓冲映射 */
-    if (ctx->frame_buffers && ctx->frame_buffers != MAP_FAILED) {
-        size_t total_size = FRAME_BUFFER_STRIDE * ctx->num_buffers;
-        munmap(ctx->frame_buffers, total_size);
-        ctx->frame_buffers = NULL;
+    /* 解除所有帧缓冲映射 */
+    for (int i = 0; i < MAX_FRAME_BUFFERS; i++) {
+        if (ctx->frame_buffers[i] && ctx->frame_buffers[i] != MAP_FAILED) {
+            munmap(ctx->frame_buffers[i], ctx->frame_size);
+            ctx->frame_buffers[i] = NULL;
+        }
     }
     
     /* 解除寄存器映射 */
