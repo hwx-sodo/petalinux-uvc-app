@@ -1,16 +1,16 @@
-# Makefile for Ethernet Camera Application
+# Makefile for CameraLink Ethernet Camera Application
 # 支持 PetaLinux/Yocto 环境和本地编译
 # 
+# 数据流架构：
+#   CameraLink(16-bit) → Video In → Width Converter(32-bit) →
+#   VDMA S2MM → DDR(YUV422/YUYV) → 网络传输
+#
 # 使用方法：
 #   make           - 编译 eth-camera-app
-#   make all       - 编译 eth-camera-app
 #   make clean     - 清理编译产物
 #   make install   - 安装到目标系统
 #
-# 目标程序：
-#   eth-camera-app - 以太网视频流传输（含诊断功能）
-#
-# 诊断功能使用：
+# 诊断功能：
 #   ./eth-camera-app -D              # 诊断模式
 #   ./eth-camera-app -D -s frame.bin # 诊断并保存帧数据
 

@@ -1,77 +1,169 @@
-# ZynqMP 以太网视频传输系统
+# ZynqMP CameraLink 以太网视频传输系统
 
-这是一个用于 ZynqMP 开发板的视频传输项目，通过以太网 (UDP/TCP) 传输视频流到PC端。
+## 概述
+
+这是一个用于 Xilinx Zynq UltraScale+ MPSoC 开发板的视频传输项目，将 CameraLink 相机数据通过以太网传输到 PC 端显示。
+
+## 数据流架构
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           FPGA PL 端                                     │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  CameraLink Camera                                                       │
+│       │                                                                  │
+│       ▼                                                                  │
+│  portA[7:0] + portB[7:0]  ─────────────► 16-bit YUV422                   │
+│       │                                                                  │
+│       ▼                                                                  │
+│  Video In to AXI4-Stream  ─────────────► 16-bit AXI4-Stream              │
+│       │                                                                  │
+│       ▼                                                                  │
+│  AXI4-Stream Data Width Converter ─────► 32-bit AXI4-Stream              │
+│       │                                   (2像素打包)                     │
+│       ▼                                                                  │
+│  AXI VDMA (S2MM)  ─────────────────────► DDR (32-bit总线写入)            │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           DDR 存储                                       │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  帧缓冲区 @ 0x20000000                                                    │
+│  格式: YUV422 (YUYV) - 每像素2字节                                        │
+│  布局: [Y0][U][Y1][V] [Y2][U][Y3][V] ...                                 │
+│                                                                          │
+│  帧0: 0x20000000 ~ 0x20095FFF (614,400 bytes)                            │
+│  帧1: 0x20096000 ~ 0x2012BFFF                                            │
+│  帧2: 0x2012C000 ~ 0x201C1FFF                                            │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           PS 端 (Linux)                                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  eth-camera-app 程序:                                                    │
+│    1. 通过 UIO 控制 VDMA                                                  │
+│    2. 通过 /dev/mem 访问帧缓冲                                            │
+│    3. 通过 UDP/TCP 发送到 PC                                              │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                              以太网传输
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           PC 端                                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  receive_stream.py:                                                      │
+│    1. 接收 UDP/TCP 数据                                                   │
+│    2. 解析帧头                                                           │
+│    3. YUV422 → BGR 转换                                                   │
+│    4. OpenCV 显示                                                         │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ## 项目结构
 
 ```
 /workspace/
-├── run_network_stream.sh   # 网络视频传输启动脚本
-├── receive_stream.py       # PC端接收程序 (Python)
-└── petalinux_app/          # 用户空间应用程序源码
-    ├── network_stream.c    # 网络传输应用主程序
-    ├── vpss_control.c/h    # VPSS控制模块
-    ├── vdma_control.c/h    # VDMA控制模块
-    └── Makefile            # 编译配置
+├── README.md                    # 本文档
+├── receive_stream.py            # PC端接收程序 (Python/OpenCV)
+├── run_network_stream.sh        # 开发板启动脚本
+│
+├── petalinux_app/               # 开发板应用程序源码
+│   ├── Makefile                 # 编译配置
+│   ├── network_stream.c         # 主程序 (网络传输)
+│   ├── vdma_control.c           # VDMA控制实现
+│   └── vdma_control.h           # VDMA控制接口
+│
+├── petalinux_config/            # PetaLinux配置
+│   ├── README.md
+│   └── system-user.dtsi         # 设备树配置
+│
+└── docs/                        # 文档
+    └── petalinux_network_config.md
 ```
 
 ## 快速开始
 
-### 软件依赖
-
-| 端 | 需要安装 | 说明 |
-|----|---------|------|
-| **PC端** | ✅ OpenCV + NumPy | 用于显示和保存视频 |
-| **开发板** | ❌ 不需要 | 纯C程序，无额外依赖 |
+### 1. 安装PC端依赖
 
 ```bash
-# 只在PC上安装
 pip install opencv-python numpy
 ```
 
-### 使用步骤（3步）
+### 2. 启动PC端接收程序（必须先启动）
 
-**第1步：PC端启动接收（⚠️ 必须先启动！）**
 ```bash
 python receive_stream.py -p 5000
 ```
 
-**第2步：开发板配置IP并启动发送**
+### 3. 开发板配置和启动
+
 ```bash
-# 配置开发板IP（首次需要）
+# 配置网络 (首次需要)
 ifconfig eth0 10.72.43.10 netmask 255.255.0.0 up
 
 # 启动发送
-sudo ./run_network_stream.sh 10.72.43.200
+./eth-camera-app -H 10.72.43.200 -p 5000
 ```
 
-**第3步：查看视频**
-- PC上会弹出视频窗口
-- 按 'q' 键退出
+### 4. 查看视频
 
-### 其他选项
+- PC上会弹出视频窗口
+- 按 `q` 键退出
+
+## 详细使用说明
+
+### 开发板端 (eth-camera-app)
 
 ```bash
-# TCP模式（可靠传输，两端都加-t）
-python receive_stream.py -p 5000 -t                    # PC端
-sudo ./run_network_stream.sh 10.72.43.200 5000 tcp     # 开发板
+# UDP模式（默认，低延迟）
+./eth-camera-app -H <PC_IP> [-p 端口]
 
-# 保存视频到文件
+# TCP模式（可靠传输）
+./eth-camera-app -H <PC_IP> -p 5000 -t
+
+# 调试模式（打印详细信息）
+./eth-camera-app -H <PC_IP> -d
+
+# 强制发送模式（忽略帧变化检测）
+./eth-camera-app -H <PC_IP> -f
+
+# 调试 + 强制发送
+./eth-camera-app -H <PC_IP> -d -f
+
+# 仅诊断模式（不发送网络数据）
+./eth-camera-app -D
+
+# 诊断并保存帧数据
+./eth-camera-app -D -s frame.bin
+```
+
+### PC端 (receive_stream.py)
+
+```bash
+# UDP模式（默认）
+python receive_stream.py -p 5000
+
+# TCP模式
+python receive_stream.py -p 5000 -t
+
+# 保存视频
 python receive_stream.py -p 5000 -o output.avi
 
-# 调试模式（查看详细信息）
-python receive_stream.py -p 5000 -d                    # PC端
-sudo ./run_network_stream.sh 10.72.43.200 5000 udp debug  # 开发板
+# 调试模式
+python receive_stream.py -p 5000 -d
 
-# 如果画面颜色不对/花屏：尝试强制YUV422打包格式
-python receive_stream.py -p 5000 -d --force-format uyvy     # PC端强制按UYVY解析
-sudo ./run_network_stream.sh 10.72.43.200 5000 udp debug uyvy  # 开发板强制按UYVY发送（帧头也会标记）
-
-# 强制发送模式（忽略帧变化检测，用于测试网络）
-sudo ./run_network_stream.sh 10.72.43.200 5000 udp force  # 开发板
-
-# 调试+强制模式
-sudo ./run_network_stream.sh 10.72.43.200 5000 udp debug force
+# 强制YUYV格式（如果颜色不对）
+python receive_stream.py -p 5000 --force-format yuyv
 ```
 
 ## 编译说明
@@ -82,10 +174,8 @@ sudo ./run_network_stream.sh 10.72.43.200 5000 udp debug force
 # 设置SDK环境
 source /path/to/sdk/environment-setup-aarch64-xilinx-linux
 
-# 进入源码目录
-cd petalinux_app
-
 # 编译
+cd petalinux_app
 make
 
 # 清理
@@ -95,18 +185,7 @@ make clean
 ### 手动交叉编译
 
 ```bash
-# 使用aarch64交叉编译器
 make CC=aarch64-linux-gnu-gcc
-```
-
-### Makefile 使用
-
-```bash
-make           # 编译eth-camera-app
-make all       # 编译eth-camera-app
-make clean     # 清理编译产物
-make install   # 安装到目标系统
-make help      # 显示帮助信息
 ```
 
 ## 技术参数
@@ -115,9 +194,10 @@ make help      # 显示帮助信息
 
 | 参数 | 值 |
 |------|-----|
-| 视频格式 | YUV422（YUYV 或 UYVY，16-bit/像素） |
-| 分辨率 | 640x480 |
+| 分辨率 | 640 × 480 |
 | 帧率 | 60 fps |
+| 像素格式 | YUV422 (YUYV) |
+| 每像素字节数 | 2 |
 | 帧大小 | 614,400 bytes |
 | 带宽需求 | ~35 MB/s (~295 Mbps) |
 
@@ -125,12 +205,11 @@ make help      # 显示帮助信息
 
 | 参数 | 值 |
 |------|-----|
-| 帧缓冲区物理地址 | 0x20000000 - 0x40000000 |
-| 帧缓冲区大小 | 0x20000000 (512 MB) |
-| VPSS基地址 | 0x80000000 |
 | VDMA基地址 | 0x80020000 |
+| 帧缓冲物理地址 | 0x20000000 |
+| 帧缓冲大小 | 512 MB (0x20000000) |
 
-### 网络传输参数
+### 网络传输
 
 | 参数 | UDP模式 | TCP模式 |
 |------|---------|---------|
@@ -140,145 +219,126 @@ make help      # 显示帮助信息
 | 可靠性 | 可能丢帧 | 可靠 |
 | 推荐场景 | 实时预览 | 录制保存 |
 
-### 网络带宽要求
+## VDMA 配置说明
 
-- **理论带宽**: 640 × 480 × 4 × 60 = 73.7 MB/s ≈ 590 Mbps
-- **推荐使用千兆以太网** (1 Gbps)
-- 百兆网络可能出现丢帧
+### S2MM 通道配置
+
+```
+控制寄存器 (0x30):
+  - RS = 1 (运行)
+  - Circular = 1 (循环缓冲模式)
+
+帧参数:
+  - VSize (0xA0) = 480 (行数)
+  - HSize (0xA4) = 1280 (每行字节数 = 640 × 2)
+  - Stride (0xA8) = 1280 (行跨度)
+
+帧缓冲地址:
+  - Addr0 (0xAC) = 0x20000000
+  - Addr1 (0xB0) = 0x20096000
+  - Addr2 (0xB4) = 0x2012C000
+```
+
+### 数据宽度转换
+
+```
+输入: 16-bit AXI4-Stream (每个传输 = 1像素)
+输出: 32-bit AXI4-Stream (每个传输 = 2像素)
+
+打包方式:
+  32-bit = [像素1(16-bit)] [像素0(16-bit)]
+         = [Y1][V] [Y0][U]
+  
+存储顺序 (小端):
+  地址 +0: Y0
+  地址 +1: U
+  地址 +2: Y1  
+  地址 +3: V
+```
 
 ## 常见问题
 
-### 1. 接收端收到数据但帧数为0
+### 1. VDMA 处于 HALTED 状态
 
-**症状:**
-- 接收端显示收到了数据（如1.1MB），但帧数始终为0
-- 开发板端没有显示"已发送 X 帧"的统计
+**可能原因：**
+- 视频输入源未连接
+- CameraLink 时序不匹配
+- Video In to AXI4-Stream 配置错误
 
-**原因分析:**
-这通常是因为VDMA的帧号没有变化。代码中有帧变化检测逻辑，如果VDMA帧号不变，会跳过发送。
-
-**解决方法:**
+**排查步骤：**
 ```bash
-# 方法1: 使用调试模式查看详细信息
-./run_network_stream.sh 10.72.43.200 5000 udp debug
+# 运行诊断模式
+./eth-camera-app -D
 
-# 方法2: 使用强制发送模式（忽略帧变化检测）
-./run_network_stream.sh 10.72.43.200 5000 udp force
+# 检查VDMA状态寄存器中的错误位
+# SOF/EOL Early/Late 错误表示时序问题
+```
 
-# 方法3: 同时使用调试和强制模式
-./run_network_stream.sh 10.72.43.200 5000 udp debug force
+### 2. 接收端收到数据但帧数为0
+
+**可能原因：**
+- VDMA帧号不变化
+- 帧头格式不匹配
+
+**解决方法：**
+```bash
+# 开发板使用强制发送
+./eth-camera-app -H <PC_IP> -f
 
 # PC端使用调试模式
 python receive_stream.py -p 5000 -d
 ```
 
-**调试输出说明:**
-- `[DEBUG] 帧号未变化，已跳过 X 次` - VDMA没有产生新帧
-- `[DEBUG] 无效帧头` - 收到的数据不是有效帧格式
-- `[DEBUG] 帧缓冲前16字节` - 显示实际帧数据内容
+### 3. 画面颜色不正确
 
-### 2. 接收端收不到数据
+**可能原因：**
+- YUV422打包格式不匹配 (YUYV vs UYVY)
 
-**排查步骤:**
+**解决方法：**
 ```bash
-# 1. 检查网络连通性
-ping <开发板IP>
+# 尝试不同的格式
+python receive_stream.py -p 5000 --force-format uyvy
+```
 
-# 2. 检查防火墙设置（Windows）
-# 打开 Windows Defender 防火墙 → 高级设置 → 入站规则
-# 添加允许端口5000的规则
+### 4. 画面撕裂或错位
 
-# 3. 检查防火墙设置（Linux）
+**可能原因：**
+- Stride 配置不正确
+- 帧缓冲对齐问题
+
+**解决方法：**
+确保 Stride = HSize (无填充情况下)
+
+### 5. 网络连接失败
+
+**排查步骤：**
+```bash
+# 检查网络连通性
+ping <PC_IP>
+
+# 检查防火墙 (Linux)
 sudo ufw allow 5000/udp
 sudo ufw allow 5000/tcp
+
+# 检查防火墙 (Windows)
+# 打开 Windows Defender 防火墙 → 高级设置 → 添加入站规则
 ```
-
-### 3. VPSS或VDMA错误
-
-**症状:**
-```
-警告: VPSS错误寄存器: 0x00000003
-VDMA状态: 0x00010000
-```
-
-**可能原因:**
-- 视频输入源未连接或未启动
-- 时钟配置问题
-- 设备树配置错误
-
-**排查步骤:**
-```bash
-# 检查UIO设备
-ls -la /dev/uio*
-
-# 检查VPSS和VDMA物理地址
-cat /sys/class/uio/uio*/maps/map0/addr
-```
-
-### 4. 视频卡顿或延迟高
-
-**可能原因:**
-- 网络带宽不足
-- CPU占用过高
-- 使用了WiFi而非有线
-
-**解决方法:**
-- 使用有线千兆网络连接
-- 关闭其他占用网络的程序
-- 降低视频分辨率或帧率
-
-### 5. UDP模式丢帧严重
-
-**解决方法:**
-```bash
-# 方法1: 增加系统接收缓冲区
-sudo sysctl -w net.core.rmem_max=8388608
-sudo sysctl -w net.core.rmem_default=8388608
-
-# 方法2: 切换到TCP模式
-python receive_stream.py -p 5000 -t
-```
-
-### 6. 编译错误
-
-```bash
-# 确保安装了必要的开发工具
-# 在PetaLinux SDK环境中编译
-source /path/to/sdk/environment-setup-xxx
-
-# 编译
-cd petalinux_app
-make
-```
-
-### 7. 保存文件时系统崩溃 (mmc1: Timeout)
-
-**症状:**
-在运行 `eth-camera-app -D -s frame.bin` 时，系统卡死或打印 `mmc1: Timeout waiting for hardware interrupt` 错误。
-
-**原因:**
-VDMA 高速写入 DDR 占用了大量总线带宽，导致 SD 卡控制器 (MMC) 在尝试写入文件时无法及时获得总线控制权或中断响应，从而超时。
-
-**解决方法:**
-- 最新版本已修复此问题：在保存文件前会自动停止 VDMA 传输，并使用分块写入+同步策略来减轻 MMC 压力。
-- 请重新编译程序并部署。
 
 ## 版本历史
 
+- **v5.0** (2024-12): 
+  - 重写VDMA控制逻辑
+  - 简化数据流架构（移除VPSS）
+  - 改进代码结构和注释
+
 - **v4.0** (2024-12): 
-  - 移除USB UVC功能，专注以太网传输
-  - 简化项目结构
-  - 目标程序重命名为 eth-camera-app
+  - 移除USB UVC功能
+  - 专注以太网传输
 
 - **v3.0**: 
   - 新增网络传输功能 (UDP/TCP)
   - 添加PC端Python接收程序
-  - 支持视频录制保存
 
-- **v2.0**: 
-  - 添加 hs 链接支持
-  - 改进错误诊断
+## 许可证
 
-- **v1.0**:
-  - 初始版本（历史上使用过RGBA，当前已切换为YUV422）
-  - USB UVC基础功能
+MIT License

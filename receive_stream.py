@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-网络视频流接收程序（PC端）
+网络视频流接收程序 (PC端)
 
 功能：
-- 接收来自ZynqMP开发板的YUV422视频流（YUYV 或 UYVY）
-- 支持UDP和TCP两种协议
-- 实时显示视频画面（OpenCV）
-- 可选保存为视频文件（保存为BGR视频）
+  - 接收来自ZynqMP开发板的YUV422视频流
+  - 支持UDP和TCP协议
+  - 实时显示视频画面 (OpenCV)
+  - 可选保存为视频文件
+
+数据流架构：
+  CameraLink(16-bit) → Video In → Width Converter(32-bit) →
+  VDMA S2MM → DDR(YUV422/YUYV) → 网络 → 本程序
 
 依赖：
     pip install opencv-python numpy
 
 使用方法：
-    # UDP模式（默认）
-    python receive_stream.py -p 5000
-
-    # TCP模式
-    python receive_stream.py -p 5000 -t
-
-    # 调试模式
-    python receive_stream.py -p 5000 -d
+    python receive_stream.py -p 5000           # UDP模式
+    python receive_stream.py -p 5000 -t        # TCP模式
+    python receive_stream.py -p 5000 -d        # 调试模式
+    python receive_stream.py -p 5000 -o out.avi  # 保存视频
 """
 
 import socket
@@ -32,7 +32,7 @@ import queue
 import sys
 from datetime import datetime
 
-# 尝试导入OpenCV和NumPy
+# 尝试导入OpenCV
 try:
     import cv2
     import numpy as np
@@ -42,18 +42,23 @@ except ImportError:
     print("警告: 未安装OpenCV，将只显示统计信息")
     print("安装方法: pip install opencv-python numpy")
 
-# 帧头格式（与C程序一致）
-FRAME_HEADER_FORMAT = '>IIIIIIII'  # 大端序，8个uint32
+
+# ============================================================================
+# 帧协议定义 (与C程序一致)
+# ============================================================================
+
+FRAME_HEADER_FORMAT = '>IIIIIIII'  # 大端序, 8个uint32
 FRAME_HEADER_SIZE = struct.calcsize(FRAME_HEADER_FORMAT)
 FRAME_MAGIC = 0x56494446  # "VIDF"
 
-# 帧头中format字段定义（与发送端一致）
-FMT_YUYV = 1  # Y0 U0 Y1 V0
-FMT_UYVY = 2  # U0 Y0 V0 Y1
+# 像素格式
+FMT_YUYV = 1
+FMT_UYVY = 2
 
 
 class FrameHeader:
     """帧头结构"""
+    
     def __init__(self, data):
         fields = struct.unpack(FRAME_HEADER_FORMAT, data)
         self.magic = fields[0]
@@ -67,17 +72,27 @@ class FrameHeader:
     
     def is_valid(self):
         return self.magic == FRAME_MAGIC
+    
+    def __str__(self):
+        fmt_str = "YUYV" if self.format == FMT_YUYV else "UYVY"
+        return (f"Frame#{self.frame_num} {self.width}x{self.height} "
+                f"{fmt_str} {self.frame_size}B")
 
+
+# ============================================================================
+# 视频接收器
+# ============================================================================
 
 class VideoReceiver:
     """视频流接收器"""
     
-    def __init__(self, port, use_tcp=False, output_file=None, debug=False, force_format='auto'):
+    def __init__(self, port, use_tcp=False, output_file=None, 
+                 debug=False, force_format='auto'):
         self.port = port
         self.use_tcp = use_tcp
         self.output_file = output_file
         self.debug = debug
-        self.force_format = force_format  # auto | yuyv | uyvy（当帧头不可信时可强制）
+        self.force_format = force_format
         
         self.running = False
         self.sock = None
@@ -89,44 +104,48 @@ class VideoReceiver:
         self.bytes_received = 0
         self.last_frame_num = -1
         self.dropped_frames = 0
-        self.invalid_headers = 0  # 无效帧头计数
-        self.partial_frames = 0   # 不完整帧计数
+        self.invalid_headers = 0
+        self.partial_frames = 0
         
-        # 帧队列（用于显示）
+        # 帧队列
         self.frame_queue = queue.Queue(maxsize=5)
         
         # 视频写入器
         self.video_writer = None
         self._writer_inited = False
-
-    def _choose_format(self, header_format: int) -> int:
-        """根据帧头 + 用户强制选项，决定使用的YUV422打包格式。"""
+    
+    def _get_format(self, header_format):
+        """获取使用的像素格式"""
         if self.force_format == 'yuyv':
             return FMT_YUYV
-        if self.force_format == 'uyvy':
+        elif self.force_format == 'uyvy':
             return FMT_UYVY
-        # auto: 优先信任帧头
-        if header_format in (FMT_YUYV, FMT_UYVY):
+        elif header_format in (FMT_YUYV, FMT_UYVY):
             return header_format
-        return FMT_YUYV
-
-    def _yuv422_to_bgr(self, frame_bytes: bytes, width: int, height: int, fmt: int):
-        """把YUV422(YUYV/UYVY)转成BGR用于显示/保存。"""
+        return FMT_YUYV  # 默认
+    
+    def _yuv422_to_bgr(self, data, width, height, fmt):
+        """YUV422转BGR"""
         if not HAS_OPENCV:
             return None
-        yuv = np.frombuffer(frame_bytes, dtype=np.uint8).reshape((height, width, 2))
+        
+        yuv = np.frombuffer(data, dtype=np.uint8).reshape((height, width, 2))
+        
         if fmt == FMT_UYVY:
             return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_UYVY)
-        # 默认YUYV
-        return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_YUY2)
-
-    def _ensure_writer(self, width: int, height: int, fps: int = 60):
+        else:  # YUYV
+            return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_YUY2)
+    
+    def _init_writer(self, width, height, fps=60):
+        """初始化视频写入器"""
         if not self.output_file or not HAS_OPENCV or self._writer_inited:
             return
+        
         fourcc = cv2.VideoWriter_fourcc(*'XVID')
-        self.video_writer = cv2.VideoWriter(self.output_file, fourcc, fps, (width, height))
+        self.video_writer = cv2.VideoWriter(
+            self.output_file, fourcc, fps, (width, height))
         self._writer_inited = True
-        print(f"视频将保存到: {self.output_file} (size={width}x{height}, fps={fps})")
+        print(f"[保存] 视频将保存到: {self.output_file}")
     
     def start(self):
         """启动接收器"""
@@ -146,29 +165,29 @@ class VideoReceiver:
         self._display_loop()
     
     def _setup_udp(self):
-        """设置UDP套接字"""
-        print(f"创建UDP服务器，监听端口: {self.port}")
+        """设置UDP"""
+        print(f"[网络] 创建UDP服务器，端口: {self.port}")
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 * 1024 * 1024)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8*1024*1024)
         self.sock.bind(('0.0.0.0', self.port))
         self.sock.settimeout(1.0)
-        print(f"等待数据...")
+        print("[网络] 等待数据...")
     
     def _setup_tcp(self):
-        """设置TCP套接字"""
-        print(f"创建TCP服务器，监听端口: {self.port}")
+        """设置TCP"""
+        print(f"[网络] 创建TCP服务器，端口: {self.port}")
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 * 1024 * 1024)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8*1024*1024)
         self.sock.bind(('0.0.0.0', self.port))
         self.sock.listen(1)
         self.sock.settimeout(1.0)
-        print("等待连接...")
+        print("[网络] 等待连接...")
         
         while self.running:
             try:
                 self.client_sock, addr = self.sock.accept()
-                print(f"连接来自: {addr}")
+                print(f"[网络] 连接来自: {addr}")
                 self.client_sock.settimeout(1.0)
                 break
             except socket.timeout:
@@ -181,24 +200,24 @@ class VideoReceiver:
         while self.running:
             try:
                 if self.use_tcp:
-                    frame = self._receive_frame_tcp()
+                    result = self._receive_frame_tcp()
                 else:
-                    frame = self._receive_frame_udp()
+                    result = self._receive_frame_udp()
                 
-                if frame is not None:
-                    # frame = (header, bytes)
-                    header, payload = frame
-
-                    # 转换并放入队列
+                if result:
+                    header, payload = result
+                    
                     if HAS_OPENCV:
-                        fmt = self._choose_format(header.format)
-                        bgr = self._yuv422_to_bgr(payload, header.width, header.height, fmt)
+                        fmt = self._get_format(header.format)
+                        bgr = self._yuv422_to_bgr(
+                            payload, header.width, header.height, fmt)
+                        
                         if bgr is not None:
-                            self._ensure_writer(header.width, header.height, fps=60)
+                            self._init_writer(header.width, header.height)
                             try:
                                 self.frame_queue.put_nowait(bgr)
                             except queue.Full:
-                                pass  # 丢弃旧帧
+                                pass
                     
                     self.frame_count += 1
                     
@@ -206,51 +225,45 @@ class VideoReceiver:
                 continue
             except Exception as e:
                 if self.running:
-                    print(f"接收错误: {e}")
+                    print(f"[错误] 接收异常: {e}")
                 break
         
-        print("接收线程退出")
+        print("[接收] 线程退出")
     
     def _receive_frame_udp(self):
         """接收UDP帧"""
-        # 接收第一个数据包（应该是帧头）
-        # UDP recvfrom会接收整个数据包，不管请求多少字节
         data, addr = self.sock.recvfrom(65535)
         self.bytes_received += len(data)
         
         if len(data) < FRAME_HEADER_SIZE:
             if self.debug:
-                print(f"[DEBUG] 收到数据包太小: {len(data)} bytes")
+                print(f"[调试] 包太小: {len(data)}B")
             return None
         
-        # 尝试解析帧头
         header = FrameHeader(data[:FRAME_HEADER_SIZE])
+        
         if not header.is_valid():
             self.invalid_headers += 1
             if self.debug and self.invalid_headers <= 10:
-                # 只打印前10次无效帧头
-                print(f"[DEBUG] 无效帧头 #{self.invalid_headers}, magic=0x{header.magic:08X} (期望0x{FRAME_MAGIC:08X})")
-                print(f"[DEBUG] 数据包前32字节: {data[:32].hex()}")
+                print(f"[调试] 无效帧头 #{self.invalid_headers}, "
+                      f"magic=0x{header.magic:08X}")
             return None
         
         if self.debug and self.frame_count == 0:
-            print(f"[DEBUG] 收到第一个有效帧头: 帧号={header.frame_num}, size={header.frame_size}, w={header.width}, h={header.height}, fmt={header.format}")
+            print(f"[调试] 首帧: {header}")
         
-        # 检测丢帧
+        # 丢帧检测
         if self.last_frame_num >= 0:
             expected = self.last_frame_num + 1
-            if header.frame_num != expected:
-                dropped = header.frame_num - expected
-                if dropped > 0:
-                    self.dropped_frames += dropped
+            if header.frame_num > expected:
+                self.dropped_frames += header.frame_num - expected
         self.last_frame_num = header.frame_num
         
-        # 如果帧头和部分数据在同一个包中
+        # 收集帧数据
         frame_data = bytearray()
         if len(data) > FRAME_HEADER_SIZE:
             frame_data.extend(data[FRAME_HEADER_SIZE:])
         
-        # 接收剩余帧数据
         while len(frame_data) < header.frame_size:
             try:
                 chunk, _ = self.sock.recvfrom(65535)
@@ -259,12 +272,14 @@ class VideoReceiver:
             except socket.timeout:
                 self.partial_frames += 1
                 if self.debug:
-                    print(f"[DEBUG] 帧 #{header.frame_num} 不完整: 收到 {len(frame_data)}/{header.frame_size} bytes")
-                return None  # 帧不完整
+                    print(f"[调试] 帧不完整: {len(frame_data)}/{header.frame_size}")
+                return None
         
         payload = bytes(frame_data[:header.frame_size])
+        
         if self.debug and self.frame_count == 0:
-            print(f"[DEBUG] 第1帧payload前32字节: {payload[:32].hex()}")
+            print(f"[调试] 首帧数据前32B: {payload[:32].hex()}")
+        
         return header, payload
     
     def _receive_frame_tcp(self):
@@ -281,10 +296,10 @@ class VideoReceiver:
         if not header.is_valid():
             return None
         
-        # 检测丢帧
+        # 丢帧检测
         if self.last_frame_num >= 0:
             expected = self.last_frame_num + 1
-            if header.frame_num != expected:
+            if header.frame_num > expected:
                 self.dropped_frames += header.frame_num - expected
         self.last_frame_num = header.frame_num
         
@@ -293,11 +308,12 @@ class VideoReceiver:
         if frame_data:
             self.bytes_received += len(frame_data)
             if self.debug and self.frame_count == 0:
-                print(f"[DEBUG] 第1帧payload前32字节: {frame_data[:32].hex()}")
+                print(f"[调试] 首帧数据前32B: {frame_data[:32].hex()}")
+        
         return (header, frame_data) if frame_data else None
     
     def _recv_exact(self, sock, size):
-        """精确接收指定字节数"""
+        """精确接收指定字节"""
         data = bytearray()
         while len(data) < size:
             try:
@@ -311,71 +327,68 @@ class VideoReceiver:
     
     def _display_loop(self):
         """显示循环"""
-        print("\n开始接收视频流...")
-        print("按 'q' 键退出\n")
+        print("\n========== 开始接收视频流 ==========")
+        print("按 'q' 键退出")
+        print("=====================================\n")
         
-        last_stats_time = time.time()
+        last_stat_time = time.time()
         
         try:
             while self.running:
-                # 更新统计信息
                 now = time.time()
-                if now - last_stats_time >= 1.0:
+                
+                # 每秒统计
+                if now - last_stat_time >= 1.0:
                     self._print_stats()
-                    last_stats_time = now
+                    last_stat_time = now
                 
                 if HAS_OPENCV:
                     try:
                         frame = self.frame_queue.get(timeout=0.1)
                         
-                        # 显示帧
                         cv2.imshow('Video Stream', frame)
                         
-                        # 保存视频
                         if self.video_writer:
                             self.video_writer.write(frame)
                         
-                        # 检测按键
-                        key = cv2.waitKey(1) & 0xFF
-                        if key == ord('q'):
+                        if cv2.waitKey(1) & 0xFF == ord('q'):
                             break
-                        
+                            
                     except queue.Empty:
-                        # 无新帧，检测按键
-                        key = cv2.waitKey(1) & 0xFF
-                        if key == ord('q'):
+                        if cv2.waitKey(1) & 0xFF == ord('q'):
                             break
                 else:
-                    # 无OpenCV，只等待
                     time.sleep(0.1)
                     
         except KeyboardInterrupt:
-            print("\n中断")
+            print("\n[中断]")
         
         self.running = False
         self._cleanup()
     
     def _print_stats(self):
-        """打印统计信息"""
-        if self.start_time is None:
+        """打印统计"""
+        if not self.start_time:
             return
         
         elapsed = time.time() - self.start_time
         fps = self.frame_count / elapsed if elapsed > 0 else 0
-        bitrate = self.bytes_received * 8 / elapsed / 1e6 if elapsed > 0 else 0
+        mbps = self.bytes_received * 8 / elapsed / 1e6 if elapsed > 0 else 0
         
-        stats = f"帧: {self.frame_count:6d} | FPS: {fps:5.1f} | 码率: {bitrate:6.1f} Mbps"
+        stats = f"帧: {self.frame_count:6d} | FPS: {fps:5.1f} | 码率: {mbps:6.1f} Mbps"
+        
         if self.dropped_frames > 0:
             stats += f" | 丢帧: {self.dropped_frames}"
         if self.invalid_headers > 0:
             stats += f" | 无效头: {self.invalid_headers}"
         if self.partial_frames > 0:
             stats += f" | 不完整: {self.partial_frames}"
+        
         print(stats)
     
     def _cleanup(self):
         """清理资源"""
-        print("\n清理资源...")
+        print("\n[清理] 释放资源...")
         
         if self.video_writer:
             self.video_writer.release()
@@ -392,63 +405,78 @@ class VideoReceiver:
         # 最终统计
         if self.start_time:
             elapsed = time.time() - self.start_time
-            print(f"\n统计:")
-            print(f"  总帧数: {self.frame_count}")
+            print(f"\n========== 统计 ==========")
+            print(f"  总帧数:   {self.frame_count}")
             print(f"  运行时间: {elapsed:.1f} 秒")
-            print(f"  平均FPS: {self.frame_count/elapsed:.1f}" if elapsed > 0 else "  平均FPS: 0")
+            if elapsed > 0:
+                print(f"  平均FPS:  {self.frame_count/elapsed:.1f}")
             print(f"  接收数据: {self.bytes_received/1024/1024:.1f} MB")
-            print(f"  丢帧: {self.dropped_frames}")
-            print(f"  无效帧头: {self.invalid_headers}")
-            print(f"  不完整帧: {self.partial_frames}")
+            print(f"  丢帧:     {self.dropped_frames}")
+            print(f"  无效头:   {self.invalid_headers}")
+            print(f"  不完整:   {self.partial_frames}")
             
             if self.frame_count == 0 and self.bytes_received > 0:
-                print("\n[诊断] 收到数据但无有效帧，可能原因:")
-                print("  1. 发送端与接收端协议不匹配")
-                print("  2. 发送端没有正确发送帧头")
-                print("  3. 使用 -d 参数启动可查看详细调试信息")
+                print("\n[诊断] 收到数据但无有效帧:")
+                print("  1. 检查发送端是否正确发送帧头")
+                print("  2. 使用 -d 参数查看详细调试信息")
+                print("  3. 检查网络连接和防火墙设置")
 
+
+# ============================================================================
+# 主函数
+# ============================================================================
 
 def main():
     parser = argparse.ArgumentParser(
         description='网络视频流接收程序',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
+数据流架构:
+  CameraLink(16-bit) → Video In → Width Converter(32-bit) →
+  VDMA S2MM → DDR(YUV422/YUYV) → 网络 → 本程序
+
 示例:
-  %(prog)s -p 5000           # UDP模式监听5000端口
-  %(prog)s -p 5000 -t        # TCP模式
-  %(prog)s -p 5000 -o out.avi  # 保存视频
-  %(prog)s -p 5000 -d        # 调试模式
+  %(prog)s -p 5000              # UDP模式
+  %(prog)s -p 5000 -t           # TCP模式
+  %(prog)s -p 5000 -o out.avi   # 保存视频
+  %(prog)s -p 5000 -d           # 调试模式
         ''')
     
     parser.add_argument('-p', '--port', type=int, default=5000,
                         help='监听端口 (默认: 5000)')
     parser.add_argument('-t', '--tcp', action='store_true',
-                        help='使用TCP协议 (默认: UDP)')
+                        help='使用TCP协议')
     parser.add_argument('-o', '--output', type=str, default=None,
                         help='输出视频文件 (如: output.avi)')
     parser.add_argument('-d', '--debug', action='store_true',
-                        help='调试模式，打印详细信息')
+                        help='调试模式')
     parser.add_argument('--force-format', type=str, default='auto',
                         choices=['auto', 'yuyv', 'uyvy'],
-                        help='强制按指定YUV422打包解析（默认auto跟随帧头）')
+                        help='强制像素格式 (默认: auto)')
     
     args = parser.parse_args()
     
-    print("=" * 50)
-    print("网络视频流接收程序")
-    print("=" * 50)
+    print("================================================")
+    print("    CameraLink 网络视频流接收")
+    print("================================================")
     print(f"协议: {'TCP' if args.tcp else 'UDP'}")
     print(f"端口: {args.port}")
     print(f"输出: {args.output if args.output else '无'}")
     print(f"调试: {'开启' if args.debug else '关闭'}")
-    print(f"解析: {args.force_format}")
+    print(f"格式: {args.force_format}")
     print(f"OpenCV: {'已安装' if HAS_OPENCV else '未安装'}")
-    print("=" * 50 + "\n")
+    print("================================================\n")
     
-    receiver = VideoReceiver(args.port, args.tcp, args.output, args.debug, args.force_format)
+    receiver = VideoReceiver(
+        args.port, 
+        args.tcp, 
+        args.output, 
+        args.debug,
+        args.force_format
+    )
     
     receiver.start()
-    print("程序退出")
+    print("\n程序退出")
 
 
 if __name__ == '__main__':

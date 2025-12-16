@@ -1,14 +1,18 @@
 #!/bin/bash
 #
-# run_network_stream.sh - 网络视频流传输启动脚本
+# run_network_stream.sh - CameraLink网络视频流传输启动脚本
+#
+# 数据流架构:
+#   CameraLink(16-bit) → Video In → Width Converter(32-bit) →
+#   VDMA S2MM → DDR(YUV422/YUYV) → 网络传输
 #
 # 用法:
-#   ./run_network_stream.sh <PC的IP地址> [端口] [协议]
+#   ./run_network_stream.sh <PC的IP地址> [端口] [协议] [选项...]
 #
 # 示例:
-#   ./run_network_stream.sh 10.72.43.200           # UDP模式，默认端口5000
-#   ./run_network_stream.sh 10.72.43.200 8000      # UDP模式，端口8000
+#   ./run_network_stream.sh 10.72.43.200           # UDP模式
 #   ./run_network_stream.sh 10.72.43.200 5000 tcp  # TCP模式
+#   ./run_network_stream.sh 10.72.43.200 5000 udp debug force
 #
 
 set -e
@@ -17,48 +21,41 @@ set -e
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # 默认参数
 DEFAULT_PORT=5000
 DEFAULT_PROTOCOL="udp"
-DEFAULT_PC_IP="10.72.43.200"    # PC的IP地址
-BOARD_IP="10.72.43.10"          # 开发板的IP地址
-NETMASK="255.255.0.0"           # 子网掩码
-APP_PATH="/usr/bin/eth-camera-app"  # 应用程序路径
-DEBUG_MODE=""
-FORCE_MODE=""
-FORMAT_MODE=""
+DEFAULT_PC_IP="10.72.43.200"
+BOARD_IP="10.72.43.10"
+NETMASK="255.255.0.0"
+APP_PATH="/usr/bin/eth-camera-app"
 
-# 检查参数
-if [ $# -lt 1 ]; then
-    echo -e "${RED}错误: 请指定PC的IP地址${NC}"
+# 帮助信息
+show_help() {
+    echo "CameraLink 网络视频流传输"
     echo ""
-    echo "用法: $0 <PC_IP> [端口] [协议] [选项]"
+    echo "用法: $0 <PC_IP> [端口] [协议] [选项...]"
     echo ""
     echo "参数:"
     echo "  PC_IP     PC端的IP地址（必需）"
     echo "  端口      网络端口（默认: ${DEFAULT_PORT}）"
     echo "  协议      udp 或 tcp（默认: ${DEFAULT_PROTOCOL}）"
     echo ""
-    echo "选项（可在协议后添加）:"
+    echo "选项（可在协议后添加，多个选项空格分隔）:"
     echo "  debug     调试模式，打印详细信息"
     echo "  force     强制发送模式，忽略帧变化检测"
     echo "  diag      仅诊断模式，不进行网络传输"
     echo "  save      诊断并保存帧数据到 frame.bin"
-    echo "  yuyv      强制按YUYV(YUV422)打包发送（默认）"
-    echo "  uyvy      强制按UYVY(YUV422)打包发送"
     echo ""
     echo "示例:"
-    echo "  $0 10.72.43.200"
-    echo "  $0 10.72.43.200 8000"
-    echo "  $0 10.72.43.200 5000 tcp"
-    echo "  $0 10.72.43.200 5000 udp debug       # 调试模式"
-    echo "  $0 10.72.43.200 5000 udp force       # 强制发送模式"
-    echo "  $0 10.72.43.200 5000 udp debug force # 调试+强制"
-    echo "  $0 10.72.43.200 5000 udp diag        # 仅诊断硬件状态"
-    echo "  $0 10.72.43.200 5000 udp save        # 诊断并保存帧数据"
-    echo "  $0 10.72.43.200 5000 udp debug uyvy  # 调试并强制UYVY打包"
+    echo "  $0 10.72.43.200                         # UDP模式"
+    echo "  $0 10.72.43.200 5000 tcp                # TCP模式"
+    echo "  $0 10.72.43.200 5000 udp debug          # 调试模式"
+    echo "  $0 10.72.43.200 5000 udp force          # 强制发送"
+    echo "  $0 10.72.43.200 5000 udp debug force    # 调试+强制"
+    echo "  $0 10.72.43.200 5000 udp diag           # 仅诊断"
+    echo "  $0 10.72.43.200 5000 udp save           # 诊断并保存帧"
     echo ""
     echo "PC端接收命令:"
     echo "  python receive_stream.py -p 5000        # UDP模式"
@@ -67,6 +64,13 @@ if [ $# -lt 1 ]; then
     echo ""
     echo "开发板IP配置:"
     echo "  ifconfig eth0 ${BOARD_IP} netmask ${NETMASK} up"
+}
+
+# 检查参数
+if [ $# -lt 1 ]; then
+    echo -e "${RED}错误: 请指定PC的IP地址${NC}"
+    echo ""
+    show_help
     exit 1
 fi
 
@@ -74,9 +78,12 @@ TARGET_IP=$1
 TARGET_PORT=${2:-$DEFAULT_PORT}
 PROTOCOL=${3:-$DEFAULT_PROTOCOL}
 
-# 解析额外选项 (第4个及以后的参数)
+# 解析额外选项
+DEBUG_MODE=""
+FORCE_MODE=""
 DIAG_MODE=""
 SAVE_MODE=""
+
 shift 3 2>/dev/null || true
 for arg in "$@"; do
     case "$arg" in
@@ -93,18 +100,12 @@ for arg in "$@"; do
             DIAG_MODE="-D"
             SAVE_MODE="-s frame.bin"
             ;;
-        yuyv)
-            FORMAT_MODE="-F yuyv"
-            ;;
-        uyvy)
-            FORMAT_MODE="-F uyvy"
-            ;;
     esac
 done
 
-echo "========================================"
-echo "网络视频流传输"
-echo "========================================"
+echo "================================================"
+echo "    CameraLink 网络视频流传输"
+echo "================================================"
 echo ""
 
 # 验证IP地址格式
@@ -130,21 +131,20 @@ echo "端口:   $TARGET_PORT"
 echo "协议:   $PROTOCOL"
 [ -n "$DEBUG_MODE" ] && echo "调试:   开启"
 [ -n "$FORCE_MODE" ] && echo "强制:   开启"
-[ -n "$DIAG_MODE" ] && echo "诊断:   仅诊断模式（不传输）"
+[ -n "$DIAG_MODE" ] && echo "诊断:   仅诊断模式"
 [ -n "$SAVE_MODE" ] && echo "保存:   帧数据将保存到 frame.bin"
-[ -n "$FORMAT_MODE" ] && echo "格式:   ${FORMAT_MODE#-F }"
 echo ""
 
-# 配置开发板IP（如果没有配置）
-echo -e "${YELLOW}检查开发板网络配置...${NC}"
+# 配置开发板IP
+echo -e "${YELLOW}检查开发板网络...${NC}"
 CURRENT_IP=$(ifconfig eth0 2>/dev/null | grep 'inet ' | awk '{print $2}' | sed 's/addr://')
 if [ -z "$CURRENT_IP" ]; then
-    echo "开发板eth0未配置IP，正在配置..."
+    echo "配置eth0..."
     ifconfig eth0 ${BOARD_IP} netmask ${NETMASK} up
     sleep 1
-    echo -e "${GREEN}✓ 已配置开发板IP: ${BOARD_IP}${NC}"
+    echo -e "${GREEN}✓ 已配置IP: ${BOARD_IP}${NC}"
 else
-    echo -e "${GREEN}✓ 开发板IP: ${CURRENT_IP}${NC}"
+    echo -e "${GREEN}✓ 当前IP: ${CURRENT_IP}${NC}"
 fi
 echo ""
 
@@ -153,14 +153,12 @@ echo -e "${YELLOW}检查网络连接...${NC}"
 if ping -c 1 -W 2 "$TARGET_IP" > /dev/null 2>&1; then
     echo -e "${GREEN}✓ 可以访问目标主机${NC}"
 else
-    echo -e "${YELLOW}⚠ 无法ping通目标主机（可能是防火墙阻止）${NC}"
-    echo "  继续尝试连接..."
+    echo -e "${YELLOW}⚠ 无法ping通（可能是防火墙）${NC}"
 fi
 echo ""
 
-# 检查应用程序（支持多个可能的名称和路径）
+# 查找应用程序
 if [ ! -f "$APP_PATH" ]; then
-    # 尝试其他路径
     for name in "eth-camera-app" "network-stream-app"; do
         for dir in "/usr/bin" "." "/home/root" "/root"; do
             if [ -f "$dir/$name" ]; then
@@ -170,54 +168,44 @@ if [ ! -f "$APP_PATH" ]; then
         done
     done
     
-    # 如果仍未找到
     if [ ! -f "$APP_PATH" ]; then
         echo -e "${RED}错误: 找不到应用程序${NC}"
-        echo "尝试过以下路径:"
-        echo "  /usr/bin/eth-camera-app"
-        echo "  /usr/bin/network-stream-app"
-        echo "  ./eth-camera-app"
-        echo ""
-        echo "请先编译应用程序:"
-        echo "  cd /path/to/petalinux_app"
-        echo "  make"
+        echo "请先编译: cd petalinux_app && make"
         exit 1
     fi
 fi
 
-echo "使用应用程序: $APP_PATH"
+echo "应用程序: $APP_PATH"
 echo ""
 
-# 提醒用户在PC端启动接收程序
-echo "========================================"
-echo -e "${YELLOW}重要: 请先在PC端启动接收程序!${NC}"
-echo "========================================"
-echo ""
-echo "PC端命令:"
-if [ "$PROTOCOL" = "tcp" ]; then
-    echo "  python receive_stream.py -p $TARGET_PORT -t"
-else
-    echo "  python receive_stream.py -p $TARGET_PORT"
+# 非诊断模式时提醒启动PC端
+if [ -z "$DIAG_MODE" ]; then
+    echo "================================================"
+    echo -e "${YELLOW}重要: 请先在PC端启动接收程序!${NC}"
+    echo "================================================"
+    echo ""
+    echo "PC端命令:"
+    if [ "$PROTOCOL" = "tcp" ]; then
+        echo "  python receive_stream.py -p $TARGET_PORT -t"
+    else
+        echo "  python receive_stream.py -p $TARGET_PORT"
+    fi
+    echo ""
+    echo "按 Enter 继续，或 Ctrl+C 取消..."
+    read -r
 fi
-echo ""
-echo "按 Enter 继续，或 Ctrl+C 取消..."
-read -r
 
 # 构建命令
 CMD="$APP_PATH -H $TARGET_IP -p $TARGET_PORT"
-if [ "$PROTOCOL" = "tcp" ]; then
-    CMD="$CMD -t"
-fi
+[ "$PROTOCOL" = "tcp" ] && CMD="$CMD -t"
 [ -n "$DEBUG_MODE" ] && CMD="$CMD $DEBUG_MODE"
 [ -n "$FORCE_MODE" ] && CMD="$CMD $FORCE_MODE"
 [ -n "$DIAG_MODE" ] && CMD="$CMD $DIAG_MODE"
 [ -n "$SAVE_MODE" ] && CMD="$CMD $SAVE_MODE"
-[ -n "$FORMAT_MODE" ] && CMD="$CMD $FORMAT_MODE"
 
 echo ""
-echo "启动命令: $CMD"
-echo "========================================"
+echo "执行: $CMD"
+echo "================================================"
 echo ""
 
-# 执行
 exec $CMD
