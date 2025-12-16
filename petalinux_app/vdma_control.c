@@ -175,6 +175,7 @@ int vdma_init(vdma_context_t *ctx,
     /*----------------------------------------------------------------------
      * 步骤2: 通过 /dev/mem 映射帧缓冲区
      *----------------------------------------------------------------------*/
+    LOG_INFO("打开 /dev/mem...");
     ctx->mem_fd = open("/dev/mem", O_RDWR | O_SYNC);
     if (ctx->mem_fd < 0) {
         LOG_ERROR("无法打开 /dev/mem: %s", strerror(errno));
@@ -182,12 +183,15 @@ int vdma_init(vdma_context_t *ctx,
         vdma_cleanup(ctx);
         return -1;
     }
+    LOG_INFO("/dev/mem 已打开");
     
-    /* 使用帧间隔计算总大小，确保映射足够的内存 */
-    size_t total_buffer_size = FRAME_BUFFER_STRIDE * num_bufs;
+    /* 只映射实际需要的帧数据大小，而不是整个16MB间隔空间 */
+    size_t total_buffer_size = ctx->frame_size * num_bufs;
+    
+    LOG_INFO("映射帧缓冲区: 物理地址=0x%08X, 大小=%zu bytes...", phys_addr, total_buffer_size);
     
     ctx->frame_buffers = mmap(NULL, total_buffer_size,
-                              PROT_READ | PROT_WRITE,
+                              PROT_READ,  /* 只需要读取权限 */
                               MAP_SHARED,
                               ctx->mem_fd, phys_addr);
     
