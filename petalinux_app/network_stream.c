@@ -50,7 +50,7 @@
 #define DEFAULT_PORT        5000
 
 /** 目标帧率 */
-#define TARGET_FPS          60
+#define TARGET_FPS          30
 #define FRAME_INTERVAL_US   (1000000 / TARGET_FPS)
 
 /** UDP分片大小 (MTU 1500 - IP/UDP头) */

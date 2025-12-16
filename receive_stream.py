@@ -173,7 +173,7 @@ class VideoReceiver:
                         if self.output_file and (not self._writer_initialized):
                             fourcc = cv2.VideoWriter_fourcc(*'XVID')
                             self.video_writer = cv2.VideoWriter(
-                                self.output_file, fourcc, 60, (header.width, header.height)
+                                self.output_file, fourcc, 30, (header.width, header.height)
                             )
                             self._writer_initialized = True
                             print(f"视频将保存到: {self.output_file} (分辨率: {header.width}x{header.height})")
