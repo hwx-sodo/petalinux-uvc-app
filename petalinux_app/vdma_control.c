@@ -183,7 +183,8 @@ int vdma_init(vdma_context_t *ctx,
         return -1;
     }
     
-    size_t total_buffer_size = ctx->frame_size * num_bufs;
+    /* 使用帧间隔计算总大小，确保映射足够的内存 */
+    size_t total_buffer_size = FRAME_BUFFER_STRIDE * num_bufs;
     
     ctx->frame_buffers = mmap(NULL, total_buffer_size,
                               PROT_READ | PROT_WRITE,
@@ -222,7 +223,12 @@ int vdma_init(vdma_context_t *ctx,
     REG_WRITE(ctx, VDMA_S2MM_FRMSTORE, num_bufs - 1);
     ctx->num_buffers = num_bufs;
     
-    /* 配置所有帧缓冲地址 */
+    /* 配置所有帧缓冲地址
+     * 帧0: 0x20000000
+     * 帧1: 0x21000000
+     * 帧2: 0x22000000
+     * 每帧间隔16MB (0x1000000)，确保不重叠
+     */
     uint32_t frame_addr_regs[] = {
         VDMA_S2MM_START_ADDR_0,
         VDMA_S2MM_START_ADDR_1,
@@ -231,7 +237,7 @@ int vdma_init(vdma_context_t *ctx,
     };
     
     for (int i = 0; i < num_bufs && i < 4; i++) {
-        uint32_t addr = phys_addr + i * ctx->frame_size;
+        uint32_t addr = phys_addr + i * FRAME_BUFFER_STRIDE;
         REG_WRITE(ctx, frame_addr_regs[i], addr);
         LOG_INFO("  帧缓冲[%d] 地址: 0x%08X", i, addr);
     }
@@ -393,7 +399,7 @@ const uint8_t* vdma_get_read_buffer(vdma_context_t *ctx, int *frame_index)
         *frame_index = read_frame;
     }
     
-    return (const uint8_t*)ctx->frame_buffers + (size_t)read_frame * ctx->frame_size;
+    return (const uint8_t*)ctx->frame_buffers + (size_t)read_frame * FRAME_BUFFER_STRIDE;
 }
 
 const uint8_t* vdma_get_frame_buffer(vdma_context_t *ctx, int index)
@@ -406,7 +412,7 @@ const uint8_t* vdma_get_frame_buffer(vdma_context_t *ctx, int index)
         return NULL;
     }
     
-    return (const uint8_t*)ctx->frame_buffers + (size_t)index * ctx->frame_size;
+    return (const uint8_t*)ctx->frame_buffers + (size_t)index * FRAME_BUFFER_STRIDE;
 }
 
 void vdma_dump_registers(vdma_context_t *ctx)
@@ -490,7 +496,7 @@ void vdma_dump_frame_info(vdma_context_t *ctx, int frame_index)
     const uint8_t *frame = vdma_get_frame_buffer(ctx, frame_index);
     if (!frame) return;
     
-    uint32_t phys_addr = ctx->frame_buffer_phys + frame_index * ctx->frame_size;
+    uint32_t phys_addr = ctx->frame_buffer_phys + frame_index * FRAME_BUFFER_STRIDE;
     
     printf("\n");
     printf("┌──────────────────────────────────────────────────────────────┐\n");
@@ -569,7 +575,7 @@ void vdma_cleanup(vdma_context_t *ctx)
     
     /* 解除帧缓冲映射 */
     if (ctx->frame_buffers && ctx->frame_buffers != MAP_FAILED) {
-        size_t total_size = ctx->frame_size * ctx->num_buffers;
+        size_t total_size = FRAME_BUFFER_STRIDE * ctx->num_buffers;
         munmap(ctx->frame_buffers, total_size);
         ctx->frame_buffers = NULL;
     }
