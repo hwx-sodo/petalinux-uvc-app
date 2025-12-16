@@ -233,6 +233,9 @@ int vdma_start(vdma_control_t *vdma)
 
 /**
  * 停止VDMA
+ * 
+ * 注意：必须等待 HALTED 位变为 1，确保 VDMA 真正停止后再返回。
+ * 否则后续的 munmap 操作可能会因为 DMA 传输仍在进行而导致系统挂起。
  */
 int vdma_stop(vdma_control_t *vdma)
 {
@@ -244,7 +247,40 @@ int vdma_stop(vdma_control_t *vdma)
     
     /* 清除Run位 */
     *(volatile uint32_t*)(vdma->base_addr + VDMA_S2MM_CONTROL) = 0;
+    
+    /* 等待 HALTED 位变为 1，确保 VDMA 真正停止 */
+    int timeout = 1000;  /* 最多等待 1 秒 (1000 * 1ms) */
+    while (timeout > 0) {
+        uint32_t status = *(volatile uint32_t*)(vdma->base_addr + VDMA_S2MM_STATUS);
+        if (status & VDMA_STATUS_HALTED) {
+            printf("VDMA 已停止 (状态: 0x%08X)\n", status);
+            return 0;
+        }
+        usleep(1000);  /* 等待 1ms */
+        timeout--;
+    }
+    
+    /* 超时警告 */
+    uint32_t status = *(volatile uint32_t*)(vdma->base_addr + VDMA_S2MM_STATUS);
+    fprintf(stderr, "警告: VDMA 停止超时 (状态: 0x%08X)\n", status);
+    
+    /* 尝试软复位 */
+    printf("尝试软复位 VDMA...\n");
+    *(volatile uint32_t*)(vdma->base_addr + VDMA_S2MM_CONTROL) = VDMA_CTRL_RESET;
     usleep(10000);
+    
+    /* 等待复位完成 */
+    timeout = 100;
+    while ((*(volatile uint32_t*)(vdma->base_addr + VDMA_S2MM_CONTROL) & VDMA_CTRL_RESET) && timeout > 0) {
+        usleep(1000);
+        timeout--;
+    }
+    
+    if (timeout <= 0) {
+        fprintf(stderr, "警告: VDMA 软复位超时\n");
+    } else {
+        printf("VDMA 软复位完成\n");
+    }
     
     return 0;
 }
