@@ -627,24 +627,27 @@ int main(int argc, char **argv)
     
     /* 调试模式下打印详细信息 */
     if (g_debug_mode) {
-        /* 多帧模式下，暂停VDMA以避免读写冲突导致卡死 */
-        if (g_vdma.num_buffers > 1) {
-            printf("[调试] 多帧模式：暂停VDMA以安全读取帧数据...\n");
-            vdma_stop(&g_vdma);
-            usleep(50000);  /* 等待50ms确保DMA停止 */
-        }
+        /* 暂停VDMA以避免读写冲突导致卡死 */
+        printf("[调试] 暂停VDMA以安全读取帧数据...\n");
+        vdma_stop(&g_vdma);
+        usleep(50000);  /* 等待50ms确保DMA停止 */
         
         vdma_dump_registers(&g_vdma);
+        
+        /* 只打印实际使用的帧缓冲 (由FRMSTORE决定) */
+        printf("\n[调试] 打印 %d 个有效帧缓冲:\n", g_vdma.num_buffers);
         for (int i = 0; i < g_vdma.num_buffers; i++) {
             vdma_dump_frame_info(&g_vdma, i);
         }
         
-        /* 多帧模式下，重新启动VDMA */
-        if (g_vdma.num_buffers > 1) {
-            printf("[调试] 重新启动VDMA...\n");
-            vdma_start(&g_vdma);
-            usleep(100000);  /* 等待100ms让视频流稳定 */
+        /* 重新启动VDMA */
+        printf("\n[调试] 重新启动VDMA...\n");
+        if (vdma_start(&g_vdma) < 0) {
+            fprintf(stderr, "VDMA重启失败\n");
+            ret = 1;
+            goto cleanup;
         }
+        usleep(100000);  /* 等待100ms让视频流稳定 */
     }
     
     /*----------------------------------------------------------------------

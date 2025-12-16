@@ -225,11 +225,7 @@ int vdma_init(vdma_context_t *ctx,
      *----------------------------------------------------------------------*/
     LOG_INFO("配置帧缓冲 (%d帧循环模式)...", num_bufs);
     
-    /* 设置帧存储数量: FRMSTORE = num_bufs - 1 */
-    REG_WRITE(ctx, VDMA_S2MM_FRMSTORE, num_bufs - 1);
-    ctx->num_buffers = num_bufs;
-    
-    /* 配置所有帧缓冲地址
+    /* 配置所有帧缓冲地址 (必须在设置FRMSTORE之前)
      * 帧0: 0x20000000
      * 帧1: 0x21000000
      * 帧2: 0x22000000
@@ -246,6 +242,27 @@ int vdma_init(vdma_context_t *ctx,
         uint32_t addr = phys_addr + i * FRAME_BUFFER_STRIDE;
         REG_WRITE(ctx, frame_addr_regs[i], addr);
         LOG_INFO("  帧缓冲[%d] 地址: 0x%08X", i, addr);
+    }
+    
+    /* 设置帧存储数量: FRMSTORE = num_bufs - 1 
+     * 注意：某些VDMA IP配置可能不支持软件修改FRMSTORE
+     */
+    REG_WRITE(ctx, VDMA_S2MM_FRMSTORE, num_bufs - 1);
+    usleep(1000);  /* 等待寄存器生效 */
+    
+    /* 验证FRMSTORE是否生效 */
+    uint32_t actual_frmstore = REG_READ(ctx, VDMA_S2MM_FRMSTORE) & 0x1F;
+    int actual_num_bufs = actual_frmstore + 1;
+    
+    if (actual_num_bufs != num_bufs) {
+        LOG_ERROR("警告: FRMSTORE设置未生效! 请求=%d, 实际=%d", 
+                  num_bufs, actual_num_bufs);
+        LOG_ERROR("可能原因: VDMA IP在Vivado中配置为固定%d帧模式", actual_num_bufs);
+        LOG_INFO("将使用实际帧数: %d", actual_num_bufs);
+        ctx->num_buffers = actual_num_bufs;
+    } else {
+        ctx->num_buffers = num_bufs;
+        LOG_INFO("FRMSTORE设置成功: %d帧", num_bufs);
     }
     
     /*----------------------------------------------------------------------
@@ -282,11 +299,9 @@ int vdma_start(vdma_context_t *ctx)
     /* 清除所有错误状态位 (写1清除) */
     REG_WRITE(ctx, VDMA_S2MM_DMASR, VDMA_DMASR_ERR_MASK);
     
-    /* 重要: 在启动前重新配置帧存储数量
-     * 某些情况下复位后FRMSTORE可能被清零
-     */
-    REG_WRITE(ctx, VDMA_S2MM_FRMSTORE, ctx->num_buffers - 1);
-    LOG_INFO("设置帧存储数量: %d (FRMSTORE=%d)", ctx->num_buffers, ctx->num_buffers - 1);
+    /* 检查当前帧缓冲数量 */
+    uint32_t frmstore = REG_READ(ctx, VDMA_S2MM_FRMSTORE) & 0x1F;
+    LOG_INFO("当前帧存储数量: %d (FRMSTORE=%d)", frmstore + 1, frmstore);
     
     /* 配置控制寄存器:
      * - RS (Run/Stop) = 1: 启动

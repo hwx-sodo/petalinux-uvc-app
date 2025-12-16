@@ -49,8 +49,8 @@
 /** 视频宽度 (像素) */
 #define VIDEO_WIDTH             640
 
-/** 视频高度 (像素) */
-#define VIDEO_HEIGHT            480
+/** 视频高度 (像素) - 红外相机实际分辨率 */
+#define VIDEO_HEIGHT            512
 
 /** 每像素字节数 (YUV422 = 2) */
 #define BYTES_PER_PIXEL         2
