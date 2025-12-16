@@ -251,6 +251,18 @@ cd petalinux_app
 make
 ```
 
+### 7. 保存文件时系统崩溃 (mmc1: Timeout)
+
+**症状:**
+在运行 `eth-camera-app -D -s frame.bin` 时，系统卡死或打印 `mmc1: Timeout waiting for hardware interrupt` 错误。
+
+**原因:**
+VDMA 高速写入 DDR 占用了大量总线带宽，导致 SD 卡控制器 (MMC) 在尝试写入文件时无法及时获得总线控制权或中断响应，从而超时。
+
+**解决方法:**
+- 最新版本已修复此问题：在保存文件前会自动停止 VDMA 传输，并使用分块写入+同步策略来减轻 MMC 压力。
+- 请重新编译程序并部署。
+
 ## 版本历史
 
 - **v4.0** (2024-12): 

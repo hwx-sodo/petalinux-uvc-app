@@ -704,11 +704,36 @@ int save_frame_to_file(vdma_control_t *vdma, int frame_index, const char *filena
         return -1;
     }
     
-    size_t written = fwrite(frame, 1, frame_size, f);
+    /* 分块写入并在中间同步，避免淹没MMC控制器 */
+    size_t written_total = 0;
+    size_t chunk_size = 64 * 1024; /* 64KB chunks */
+    size_t remaining = frame_size;
+    uint8_t *ptr = frame;
+    
+    while (remaining > 0) {
+        size_t to_write = (remaining < chunk_size) ? remaining : chunk_size;
+        size_t w = fwrite(ptr, 1, to_write, f);
+        if (w != to_write) {
+            break;
+        }
+        written_total += w;
+        ptr += w;
+        remaining -= w;
+        
+        /* 每写一定量强制刷新一次，避免内核积压太多脏页导致一次性写回时超时 */
+        if (written_total % (256 * 1024) == 0) {
+            fflush(f);
+            fsync(fileno(f));
+            usleep(1000); 
+        }
+    }
+
+    fflush(f);
+    fsync(fileno(f));
     fclose(f);
     
-    if (written != (size_t)frame_size) {
-        printf("写入不完整: %zu / %d\n", written, frame_size);
+    if (written_total != (size_t)frame_size) {
+        printf("写入不完整: %zu / %d\n", written_total, frame_size);
         return -1;
     }
     
@@ -898,6 +923,9 @@ void print_usage(const char *prog)
 
 int main(int argc, char **argv)
 {
+    /* 禁用stdout缓冲，确保日志实时输出 */
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     int ret = 0;
     
     /* 解析命令行参数 */
@@ -995,6 +1023,11 @@ int main(int argc, char **argv)
     if (diag_only) {
         /* 如果指定了保存文件 */
         if (save_file[0] != '\0') {
+            /* 停止VDMA以减轻总线压力，防止MMC超时 */
+            printf("[DIAG] 正在停止VDMA以确保文件保存安全...\n");
+            vdma_stop(&vdma);
+            usleep(100000); /* 等待100ms让总线平静 */
+
             int cur = vdma_get_current_frame(&vdma);
             printf("\n[DIAG] VDMA当前写入帧号: %d（总缓冲=%d）\n", cur, vdma.num_frames);
             printf("[DIAG] 为避免保存到“没被写到的缓冲”，将保存全部帧缓冲到多个文件。\n");
