@@ -490,14 +490,14 @@ void vdma_dump_frame_info(vdma_context_t *ctx, int frame_index)
         }
         printf("│\n");
         
-        /* YUV422解析 (UYVY: U Y0 V Y1) */
-        printf("│   UYVY解析: ");
+        /* YUV422解析 (YUYV: Y0 U Y1 V) */
+        printf("│   YUYV解析: ");
         for (int g = 0; g < 4 && (offset + g * 4 + 3) < ctx->frame_size; g++) {
-            uint8_t u  = frame[offset + g * 4 + 0];
-            uint8_t y0 = frame[offset + g * 4 + 1];
-            uint8_t v  = frame[offset + g * 4 + 2];
-            uint8_t y1 = frame[offset + g * 4 + 3];
-            printf("(U=%3d Y0=%3d V=%3d Y1=%3d) ", u, y0, v, y1);
+            uint8_t y0 = frame[offset + g * 4 + 0];
+            uint8_t u  = frame[offset + g * 4 + 1];
+            uint8_t y1 = frame[offset + g * 4 + 2];
+            uint8_t v  = frame[offset + g * 4 + 3];
+            printf("(Y0=%3d U=%3d Y1=%3d V=%3d) ", y0, u, y1, v);
         }
         printf("│\n");
     }
