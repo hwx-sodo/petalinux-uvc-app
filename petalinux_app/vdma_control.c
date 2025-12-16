@@ -453,13 +453,29 @@ void vdma_dump_registers(vdma_context_t *ctx)
         return;
     }
     
-    /* S2MM通道寄存器 */
+    printf("[寄存器读取] 开始...\n");
+    fflush(stdout);
+    
+    /* S2MM通道寄存器 - 逐个读取并输出，便于定位卡住的位置 */
+    printf("[寄存器读取] DMACR...\n"); fflush(stdout);
     uint32_t dmacr = REG_READ(ctx, VDMA_S2MM_DMACR);
+    
+    printf("[寄存器读取] DMASR...\n"); fflush(stdout);
     uint32_t dmasr = REG_READ(ctx, VDMA_S2MM_DMASR);
+    
+    printf("[寄存器读取] VSIZE...\n"); fflush(stdout);
     uint32_t vsize = REG_READ(ctx, VDMA_S2MM_VSIZE);
+    
+    printf("[寄存器读取] HSIZE...\n"); fflush(stdout);
     uint32_t hsize = REG_READ(ctx, VDMA_S2MM_HSIZE);
+    
+    printf("[寄存器读取] STRIDE...\n"); fflush(stdout);
     uint32_t stride = REG_READ(ctx, VDMA_S2MM_FRMDLY_STRIDE);
+    
+    printf("[寄存器读取] FRMSTORE...\n"); fflush(stdout);
     uint32_t frmstore = REG_READ(ctx, VDMA_S2MM_FRMSTORE);
+    
+    printf("[寄存器读取] 完成\n"); fflush(stdout);
     
     printf("\n");
     printf("============ VDMA 寄存器状态 ============\n");
