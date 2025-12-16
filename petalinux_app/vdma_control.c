@@ -214,27 +214,33 @@ int vdma_init(vdma_context_t *ctx,
     LOG_INFO("VDMA复位完成");
     
     /*----------------------------------------------------------------------
-     * 步骤4: 配置帧缓冲地址
+     * 步骤4: 配置帧缓冲数量 (必须在 Run 之前!)
      *----------------------------------------------------------------------*/
-    LOG_INFO("配置帧缓冲地址...");
+    LOG_INFO("配置帧缓冲...");
     
-    /* 尝试配置帧存储数量 (NUM_FSTORES)
-     * 注意: 如果Vivado中NUM_FSTORES=1，这个寄存器是只读的
+    /* 
+     * 根据 Xilinx PG020 文档：
+     * FRMSTORE 寄存器存储的是 (帧数 - 1)
+     * 例如：3个帧缓冲，应该写入 2
      */
-    REG_WRITE(ctx, VDMA_S2MM_FRMSTORE, num_bufs);
+    uint32_t frmstore_value = num_bufs - 1;
+    REG_WRITE(ctx, VDMA_S2MM_FRMSTORE, frmstore_value);
+    
+    /* 验证写入 */
     uint32_t actual_frmstore = REG_READ(ctx, VDMA_S2MM_FRMSTORE);
+    LOG_INFO("  FRMSTORE 写入: %d, 读回: %d", frmstore_value, actual_frmstore);
     
-    /* FrmStore=0 表示1个帧存储，FrmStore=1 表示2个，以此类推 */
-    int hw_num_buffers = (int)actual_frmstore + 1;
-    
-    if (hw_num_buffers < num_bufs) {
-        LOG_INFO("  ⚠ 硬件帧存储数: %d (Vivado中NUM_FSTORES=%d)", hw_num_buffers, hw_num_buffers);
-        LOG_INFO("  ⚠ 请求帧缓冲数: %d", num_bufs);
-        LOG_INFO("  ⚠ 将使用硬件支持的 %d 个帧缓冲", hw_num_buffers);
-        ctx->num_buffers = hw_num_buffers;  /* 使用实际硬件支持的数量 */
+    if (actual_frmstore != frmstore_value) {
+        LOG_INFO("  ⚠ FRMSTORE 写入未生效，使用默认值");
     }
     
-    /* 配置各帧缓冲起始地址 */
+    /* 实际使用的帧缓冲数 = FRMSTORE + 1 */
+    ctx->num_buffers = (int)actual_frmstore + 1;
+    LOG_INFO("  实际帧缓冲数: %d", ctx->num_buffers);
+    
+    /*----------------------------------------------------------------------
+     * 步骤5: 配置帧缓冲地址
+     *----------------------------------------------------------------------*/
     uint32_t addr_offsets[] = {
         VDMA_S2MM_START_ADDR_0,
         VDMA_S2MM_START_ADDR_1,
@@ -242,7 +248,6 @@ int vdma_init(vdma_context_t *ctx,
         VDMA_S2MM_START_ADDR_3
     };
     
-    /* 只配置硬件实际支持的帧缓冲数量 */
     for (int i = 0; i < ctx->num_buffers && i < 4; i++) {
         uint32_t buf_addr = phys_addr + i * ctx->frame_size;
         REG_WRITE(ctx, addr_offsets[i], buf_addr);
@@ -250,7 +255,7 @@ int vdma_init(vdma_context_t *ctx,
     }
     
     /*----------------------------------------------------------------------
-     * 步骤5: 配置视频参数
+     * 步骤6: 配置视频参数
      *----------------------------------------------------------------------*/
     LOG_INFO("配置视频参数...");
     
@@ -458,7 +463,7 @@ void vdma_dump_registers(vdma_context_t *ctx)
     printf("║   VSize (0xA0):    %-6d (期望: %d)                        ║\n", vsize, ctx->height);
     printf("║   HSize (0xA4):    %-6d (期望: %d)                      ║\n", hsize, ctx->width * ctx->bytes_per_pixel);
     printf("║   Stride (0xA8):   %-6d                                     ║\n", stride);
-    printf("║   FrmStore (0x48): %-6d                                     ║\n", frmstore);
+    printf("║   FrmStore (0x48): %-6d (表示 %d 个帧缓冲)                ║\n", frmstore, frmstore + 1);
     printf("║                                                              ║\n");
     printf("║ 帧缓冲地址 (实际使用: %d 个):                                  ║\n", ctx->num_buffers);
     printf("║   [0]: 0x%08X %s                                    ║\n", 
