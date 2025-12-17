@@ -81,11 +81,14 @@
 #define VDMA_S2MM_HSIZE         0xA4    /* S2MM Horizontal Size (每行字节数) */
 #define VDMA_S2MM_FRMDLY_STRIDE 0xA8    /* S2MM Frame Delay / Stride */
 
-/* S2MM 帧缓冲起始地址 (支持最多32个缓冲) */
-#define VDMA_S2MM_START_ADDR_0  0xAC    /* 帧缓冲0起始地址 */
-#define VDMA_S2MM_START_ADDR_1  0xB0    /* 帧缓冲1起始地址 */
-#define VDMA_S2MM_START_ADDR_2  0xB4    /* 帧缓冲2起始地址 */
-#define VDMA_S2MM_START_ADDR_3  0xB8    /* 帧缓冲3起始地址 */
+/* S2MM 帧缓冲起始地址 (64-bit模式，每帧间隔8字节) */
+#define VDMA_S2MM_START_ADDR_0  0xAC    /* 帧缓冲0 LSB */
+/* 0xB0 是 帧缓冲0 的 MSB，跳过 */
+#define VDMA_S2MM_START_ADDR_1  0xB4    /* 帧缓冲1 LSB (0xAC + 8) */
+/* 0xB8 是 帧缓冲1 的 MSB，跳过 */
+#define VDMA_S2MM_START_ADDR_2  0xBC    /* 帧缓冲2 LSB (0xB4 + 8) */
+/* 0xC0 是 帧缓冲2 的 MSB，跳过 */
+#define VDMA_S2MM_START_ADDR_3  0xC4    /* 帧缓冲3 LSB (0xBC + 8) */
 
 /*============================================================================
  * VDMA S2MM 控制寄存器 (DMACR 0x30) 位定义
