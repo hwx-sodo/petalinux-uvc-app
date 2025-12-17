@@ -52,6 +52,7 @@ UDP_CHUNK_SIZE = 1400
 
 # 像素格式（与发送端 eth-camera-app 一致）
 PIXFMT_YUYV = 1  # YUV422 packed (YUYV)
+PIXFMT_UYVY = 2  # YUV422 packed (UYVY) - CameraLink相机通常输出此格式
 
 
 class FrameHeader:
@@ -286,10 +287,10 @@ class VideoReceiver:
         # ---------- YUV422 (YUYV/UYVY) ----------
         # auto：严格按帧头决定；只有用户显式指定yuyv/uyvy才强制覆盖
         is_yuv_forced = forced in ('yuyv', 'uyvy', 'yuv', 'yuv422')
-        is_yuv = (header.format == PIXFMT_YUYV) if forced == 'auto' else is_yuv_forced
+        is_yuv = (header.format in (PIXFMT_YUYV, PIXFMT_UYVY)) if forced == 'auto' else is_yuv_forced
         if not is_yuv:
             # 本项目只支持YUV422：如果帧头不是YUV422，就直接拒绝（避免误解码）
-            raise ValueError(f"不支持的像素格式: header.format={header.format} (仅支持YUYV/YUV422)")
+            raise ValueError(f"不支持的像素格式: header.format={header.format} (仅支持YUYV/UYVY)")
 
         if is_yuv:
             expected = w * h * 2
@@ -297,11 +298,18 @@ class VideoReceiver:
                 raise ValueError(f"帧数据不足(YUV422): got={len(frame_bytes)}, expected>={expected}")
             yuv = np.frombuffer(frame_bytes[:expected], dtype=np.uint8).reshape((h, w, 2))
 
+            # 确定字节序：优先用户强制指定，其次帧头格式，最后默认参数
             order = self.yuv_order.lower()
             if forced == 'uyvy':
                 order = 'uyvy'
-            if forced == 'yuyv':
+            elif forced == 'yuyv':
                 order = 'yuyv'
+            elif forced == 'auto':
+                # 自动模式：根据帧头的 format 字段判断
+                if header.format == PIXFMT_UYVY:
+                    order = 'uyvy'
+                elif header.format == PIXFMT_YUYV:
+                    order = 'yuyv'
 
             if order == 'uyvy':
                 return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_UYVY)

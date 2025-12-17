@@ -69,7 +69,7 @@ typedef struct __attribute__((packed)) {
     uint32_t frame_num;         /* 帧编号 */
     uint32_t width;             /* 图像宽度 */
     uint32_t height;            /* 图像高度 */
-    uint32_t format;            /* 像素格式: 1=YUYV, 2=UYVY */
+    uint32_t format;            /* 像素格式: 1=YUYV, 2=UYVY (CameraLink相机通常输出UYVY) */
     uint32_t frame_size;        /* 帧数据大小 */
     uint32_t timestamp_sec;     /* 时间戳（秒） */
     uint32_t timestamp_usec;    /* 时间戳（微秒） */
@@ -211,7 +211,7 @@ static int send_frame_header(int sock, uint32_t frame_num,
     header.frame_num = htonl(frame_num);
     header.width = htonl((uint32_t)width);
     header.height = htonl((uint32_t)height);
-    header.format = htonl(PIXFMT_YUYV);  /* 固定YUYV格式 */
+    header.format = htonl(PIXFMT_UYVY);  /* CameraLink相机输出UYVY格式 */
     header.frame_size = htonl((uint32_t)frame_size);
     header.timestamp_sec = htonl((uint32_t)ts.tv_sec);
     header.timestamp_usec = htonl((uint32_t)(ts.tv_nsec / 1000));

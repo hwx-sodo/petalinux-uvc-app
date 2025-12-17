@@ -244,8 +244,15 @@ int vdma_init(vdma_context_t *ctx,
     
     for (int i = 0; i < num_bufs && i < 4; i++) {
         uint32_t addr = phys_addr + i * FRAME_BUFFER_STRIDE;
+        
+        /* 写入低32位地址 (LSB) */
         REG_WRITE(ctx, frame_addr_regs[i], addr);
-        LOG_INFO("  帧缓冲[%d] 地址: 0x%08X", i, addr);
+        
+        /* [64-bit VDMA] 显式清除高32位地址 (MSB)，防止残留垃圾值 */
+        /* MSB 寄存器位于 LSB 寄存器地址 + 4 的位置 */
+        REG_WRITE(ctx, frame_addr_regs[i] + 4, 0); 
+
+        LOG_INFO("  帧缓冲[%d] 地址: 0x%08X (LSB=0x%02X, MSB=0)", i, addr, frame_addr_regs[i]);
     }
     
     /*----------------------------------------------------------------------
