@@ -292,11 +292,13 @@ python receive_stream.py -p 5000 -d
 
 **可能原因：**
 - YUV422打包格式不匹配 (YUYV vs UYVY)
+- **注意：CameraLink 相机通常输出 UYVY 格式（不是 YUYV）**
 
 **解决方法：**
 ```bash
-# 尝试不同的格式
-python receive_stream.py -p 5000 --force-format uyvy
+# 程序已自动识别 UYVY 格式
+# 如果颜色仍不正确，可强制指定：
+python receive_stream.py -p 5000 -c uyvy
 ```
 
 ### 4. 画面撕裂或错位
@@ -306,11 +308,21 @@ python receive_stream.py -p 5000 --force-format uyvy
 - Stride 配置不正确
 - 帧缓冲对齐问题
 - 帧率过高导致传输不及时
+- **VDMA IP 帧存储数量配置不足**（最常见！）
 
 **解决方法：**
 - 使用多帧缓冲模式（当前已配置为3帧循环）
 - 降低帧率（已从60fps降至30fps）
 - 确保 Stride = HSize (无填充情况下)
+- **检查 Vivado 中 VDMA IP 的 "Number of Frame Stores" 配置是否 >= 3**
+
+**诊断方法：**
+```bash
+# 运行诊断模式，检查 FrmStore 值
+./eth-camera-app -D
+# 如果显示 "FrmStore: 0 (1个帧缓冲)"
+# 说明 VDMA IP 只配置了 1 帧，需要在 Vivado 中修改
+```
 
 ### 5. 网络连接失败
 
